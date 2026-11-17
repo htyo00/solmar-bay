@@ -1,124 +1,195 @@
-// The game's rules and state, with no drawing and no browser in it: the player's paddle, the
-// pool of falling blocks and coins, spawning, collisions, score, lives and level. step() advances
-// one fixed step and returns what happened as bit flags, so the caller can react without the
-// world knowing about screens or sound. Nothing here allocates after createWorld returns.
-import { BLOCK, COIN, FIELD, LEVEL, LIVES, PLAYER, POOL_SIZE } from './config.js';
+// The world: one state object, every system stepped in a fixed order, events
+// returned as bit flags so the loop can react without the world knowing about
+// screens or sound. Nothing here draws or touches the DOM.
+import { STEP, CAR_MODELS, DIFFICULTIES } from './config.js';
+import { createRandom, pick } from './random.js';
+import { createCity, createCityMeshes, districtAt } from './city.js';
+import { createCar, stepCar } from './vehicles.js';
+import { createPlayer, stepPlayer, exitCar, drivingInput } from './player.js';
+import { createTraffic, stepTraffic } from './traffic.js';
+import { createPeds, stepPeds, addFleeingPed } from './pedestrians.js';
+import { createPolice, stepPolice } from './police.js';
+import { createWanted, crime, stepWanted } from './wanted.js';
+import { createMissions, startMission, stepMissions } from './missions.js';
+import { resolveCombat } from './combat.js';
+import { loadSave } from './save.js';
 
-export const KIND_BLOCK = 0;
-export const KIND_COIN = 1;
+export const EVENT_STEAL = 1;
+export const EVENT_HIT_PED = 2;
+export const EVENT_WANTED = 4;
+export const EVENT_OBJECTIVE = 8;
+export const EVENT_COMPLETE = 16;
+export const EVENT_BUSTED = 32;
+export const EVENT_WASTED = 64;
+export const EVENT_RAM_COP = 128;
 
-export const EVENT_HIT = 1;
-export const EVENT_COIN = 2;
-export const EVENT_OVER = 4;
+const DISTRICT_NAMES = { downtown: 'Downtown', marina: 'Marina', hills: 'Hills', port: 'Port', beach: 'Ocean Drive' };
 
-function overlaps(a, b) {
-  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+const PARKED_SPOTS = [
+  { x: -20, z: -52, heading: Math.PI / 2 },
+  { x: 20, z: 68, heading: -Math.PI / 2 },
+  { x: 68, z: -20, heading: 0 },
+  { x: -68, z: 20, heading: Math.PI },
+  { x: 40, z: 108, heading: Math.PI / 2 },
+];
+
+export function createWorld(seed, scene) {
+  const random = createRandom(seed);
+  const city = createCity(random);
+  const save = loadSave();
+  const world = {
+    seed, random, city, save, scene,
+    elapsed: 0,
+    events: 0,
+    shake: 0,
+    handbrakeSmoke: false,
+    lastImpact: 0,
+    cameraMode: 'title',
+    shotCam: null,
+    difficulty: DIFFICULTIES[save.difficulty] || DIFFICULTIES.Street,
+    difficultyName: save.difficulty,
+    feedLog: [],
+    fpsSample: null,
+    saveMissionResult: null,
+    player: null,
+    cars: [],
+    traffic: [],
+    peds: [],
+    police: null,
+    wanted: null,
+    missions: null,
+  };
+  world.feed = (text) => {
+    world.feedLog.push(text);
+    if (world.feedLog.length > 6) world.feedLog.shift();
+  };
+  world.crime = (type) => crime(world, type);
+  world.districtName = (x, z) => {
+    const bx = [-80, -40, 0, 40, 80].reduce((a, b) => (Math.abs(b - x) < Math.abs(a - x) ? b : a));
+    const bz = [-80, -40, 0, 40, 80].reduce((a, b) => (Math.abs(b - z) < Math.abs(a - z) ? b : a));
+    return DISTRICT_NAMES[districtAt(bx, bz)] || 'Solmar Bay';
+  };
+  world.addFleeingPed = (x, z) => addFleeingPed(world, x, z);
+
+  scene.add(createCityMeshes(city, random));
+  world.player = createPlayer(city);
+  scene.add(world.player.group);
+  spawnParkedCars(world, random);
+  world.traffic = createTraffic(world, random);
+  for (const car of world.traffic) scene.add(car.group);
+  world.peds = createPeds(world, random);
+  world.police = createPolice(world);
+  world.wanted = createWanted();
+  world.missions = createMissions(world);
+  return world;
 }
 
-export function createWorld(random) {
-  const player = { x: 0, y: FIELD.groundY - PLAYER.height, width: PLAYER.width, height: PLAYER.height, invulnerable: 0 };
-  const items = [];
-  for (let index = 0; index < POOL_SIZE; index += 1) {
-    items.push({ active: false, kind: KIND_BLOCK, x: 0, y: 0, width: 0, height: 0, speed: 0 });
+function spawnParkedCars(world, random) {
+  const comet = createCar(CAR_MODELS[0], world.city.cometSpot.x, world.city.cometSpot.z, world.city.cometSpot.heading);
+  world.cars.push(comet);
+  world.scene.add(comet.group);
+  for (const spot of PARKED_SPOTS) {
+    const model = pick(random, CAR_MODELS.slice(1));
+    const car = createCar(model, spot.x, spot.z, spot.heading);
+    world.cars.push(car);
+    world.scene.add(car.group);
   }
-  const state = { player, items, score: 0, lives: LIVES, level: 1, elapsed: 0, blockTimer: 0, coinTimer: 0 };
-
-  function reset() {
-    player.x = (FIELD.width - player.width) / 2;
-    player.invulnerable = 0;
-    for (const item of items) item.active = false;
-    state.score = 0;
-    state.lives = LIVES;
-    state.level = 1;
-    state.elapsed = 0;
-    state.blockTimer = BLOCK.interval;
-    state.coinTimer = COIN.interval;
-  }
-
-  function freeItem() {
-    for (let index = 0; index < items.length; index += 1) if (!items[index].active) return items[index];
-    return null;
-  }
-
-  function spawnBlock() {
-    const item = freeItem();
-    if (item === null) return;
-    item.active = true;
-    item.kind = KIND_BLOCK;
-    item.width = BLOCK.minWidth + random() * (BLOCK.maxWidth - BLOCK.minWidth);
-    item.height = BLOCK.height;
-    item.x = random() * (FIELD.width - item.width);
-    item.y = -item.height;
-    item.speed = BLOCK.speed + BLOCK.speedPerLevel * (state.level - 1) + random() * BLOCK.speedJitter;
-  }
-
-  function spawnCoin() {
-    const item = freeItem();
-    if (item === null) return;
-    item.active = true;
-    item.kind = KIND_COIN;
-    item.width = COIN.size;
-    item.height = COIN.size;
-    item.x = random() * (FIELD.width - item.width);
-    item.y = -item.height;
-    item.speed = COIN.speed + COIN.speedPerLevel * (state.level - 1);
-  }
-
-  function blockInterval() {
-    return Math.max(BLOCK.minInterval, BLOCK.interval * BLOCK.intervalScale ** (state.level - 1));
-  }
-
-  /**
-   * One fixed step. `direction` is -1, 0 or 1 (left, still, right). With `harmless` set (the title
-   * screen's backdrop) things fall but nothing touches the player and nothing scores.
-   */
-  function step(dt, direction, harmless) {
-    let events = 0;
-    state.elapsed += dt;
-    state.level = Math.min(LEVEL.max, 1 + Math.floor(state.elapsed / LEVEL.seconds));
-
-    player.x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * dt));
-    if (player.invulnerable > 0) player.invulnerable = Math.max(0, player.invulnerable - dt);
-
-    state.blockTimer -= dt;
-    if (state.blockTimer <= 0) {
-      spawnBlock();
-      state.blockTimer += blockInterval();
-    }
-    state.coinTimer -= dt;
-    if (state.coinTimer <= 0) {
-      spawnCoin();
-      state.coinTimer += COIN.interval + random() * COIN.intervalJitter;
-    }
-
-    for (let index = 0; index < items.length; index += 1) {
-      const item = items[index];
-      if (!item.active) continue;
-      item.y += item.speed * dt;
-      if (item.y > FIELD.groundY) {
-        item.active = false;
-        if (item.kind === KIND_BLOCK && !harmless) state.score += BLOCK.dodgePoints;
-        continue;
-      }
-      if (harmless || !overlaps(item, player)) continue;
-      if (item.kind === KIND_COIN) {
-        item.active = false;
-        state.score += COIN.points;
-        events |= EVENT_COIN;
-      } else if (player.invulnerable === 0) {
-        item.active = false;
-        state.lives -= 1;
-        player.invulnerable = PLAYER.invulnerable;
-        events |= EVENT_HIT;
-        if (state.lives === 0) {
-          events |= EVENT_OVER;
-          break;
-        }
-      }
-    }
-    return events;
-  }
-
-  reset();
-  return { state, reset, step };
 }
+
+function clearPolice(world) {
+  for (const car of world.police.cars) {
+    world.scene.remove(car.group);
+    world.cars.splice(world.cars.indexOf(car), 1);
+  }
+  for (const car of world.police.roadblock) {
+    world.scene.remove(car.group);
+    world.cars.splice(world.cars.indexOf(car), 1);
+  }
+  for (const cop of world.police.footCops) world.scene.remove(cop.group);
+  world.police.cars = [];
+  world.police.roadblock = [];
+  world.police.footCops = [];
+  world.police.heli.visible = false;
+}
+
+/** Back to the start of mission 1: Dante on foot at the Loft, city reset. */
+export function resetWorld(world) {
+  const player = world.player;
+  if (player.inCar) {
+    player.inCar.isPlayer = false;
+    player.inCar = null;
+  }
+  player.x = world.city.start.x;
+  player.z = world.city.start.z;
+  player.heading = world.city.start.heading;
+  player.camYaw = world.city.start.heading;
+  player.health = 100;
+  player.speed = 0;
+  player.group.visible = true;
+  player.group.position.set(player.x, 0, player.z);
+  clearPolice(world);
+  // Parked cars back to their spots, traffic respawned fresh.
+  for (const car of world.cars) world.scene.remove(car.group);
+  world.cars = [];
+  for (const car of world.traffic) world.scene.remove(car.group);
+  world.traffic = [];
+  spawnParkedCars(world, world.random);
+  world.traffic = createTraffic(world, world.random);
+  for (const car of world.traffic) world.scene.add(car.group);
+  for (const ped of world.peds) {
+    ped.state = 'walk';
+    ped.fleeTimer = 0;
+    ped.fallenTimer = 0;
+    ped.group.rotation.x = 0;
+    ped.group.position.y = 0;
+  }
+  world.wanted = createWanted();
+  world.missions = createMissions(world);
+  world.elapsed = 0;
+  world.shake = 0;
+  world.feedLog = [];
+  world.saveMissionResult = null;
+  world.cameraMode = 'play';
+  world.shotCam = null;
+}
+
+/**
+ * One fixed step. `driveOverride` (shots) steers the player car directly;
+ * otherwise the keyboard drives. Returns the event flags for this step.
+ */
+export function stepWorld(world, dt, input, driveOverride) {
+  world.elapsed += dt;
+  world.lastImpact = 0;
+  let events = 0;
+  const player = world.player;
+  if (player.inCar) {
+    const car = player.inCar;
+    const drive = driveOverride || drivingInput(input);
+    world.handbrakeSmoke = drive.handbrake && Math.abs(car.speed) > 10;
+    const impact = stepCar(car, drive, dt, world.city, world.cars);
+    if (impact > 0) world.lastImpact = impact;
+    if (impact > 8) world.shake = Math.min(1, world.shake + impact / 25);
+    // Keep Dante's position and facing glued to his car: every distance
+    // check and the exit facing read them.
+    player.x = car.x;
+    player.z = car.z;
+    player.heading = car.heading;
+    // Tap E while crawling to step out.
+    if (input.steal() && !player.prevSteal && Math.abs(car.speed) < 2) exitCar(world);
+    player.prevSteal = input.steal();
+    player.camYaw = car.heading;
+  } else {
+    events |= stepPlayer(world, dt, input);
+    player.prevSteal = input.steal();
+  }
+  events |= stepTraffic(world, dt, world.random);
+  events |= stepPeds(world, dt);
+  events |= stepPolice(world, dt, world.random);
+  stepWanted(world, dt);
+  events |= resolveCombat(world, dt);
+  events |= stepMissions(world, dt, events);
+  world.events = events;
+  return events;
+}
+
+export { STEP, startMission };

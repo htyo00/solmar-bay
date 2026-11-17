@@ -1,141 +1,164 @@
-// Drawing only: the world's state and the current screen in, pixels out. The 1280x720 playfield
-// is scaled to fit the window and centred, the margin filled with the backdrop colour. Flat
-// rectangles and circles, canvas text for the HUD and the panels. Text that holds a number is
-// rebuilt only when the number changes, so a frame allocates nothing.
-import { FIELD, FONT, LIVES, PALETTE } from './config.js';
-import { KIND_COIN } from './world.js';
+// The three.js scene: golden-hour sun, warm haze, a sun disc and drifting
+// clouds over Solmar Bay. One renderer, one shadow-casting sun, one chase
+// camera that follows Dante on foot and by car — plus the smoke puffs that
+// mark a hurt car or a handbrake slide.
+import * as THREE from 'three';
+import { PALETTE } from './config.js';
 
-export const SCREEN_TITLE = 'title';
-export const SCREEN_PLAY = 'play';
-export const SCREEN_PAUSED = 'paused';
-export const SCREEN_OVER = 'over';
+export function createRender(canvas) {
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
 
-/** The panel's width; its height grows with its lines: room for the title, the lines and the prompt. */
-const PANEL = { width: 600, top: 134, line: 34, bottom: 70 };
-const LIFE_SIZE = 20;
-const LIFE_GAP = 8;
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(PALETTE.sky);
+  scene.fog = new THREE.Fog(0xe8b48a, 140, 460);
 
-function cachedLabel(prefix) {
-  let value = -1;
-  let text = '';
-  return function label(next) {
-    if (next !== value) {
-      value = next;
-      text = prefix + next;
+  const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 900);
+  camera.position.set(0, 40, 120);
+
+  // Low golden-hour sun from the north-west, long shadows across the streets.
+  const sun = new THREE.DirectionalLight(PALETTE.sun, 2.6);
+  sun.position.set(-140, 95, -80);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -140;
+  sun.shadow.camera.right = 140;
+  sun.shadow.camera.top = 140;
+  sun.shadow.camera.bottom = -140;
+  sun.shadow.camera.near = 10;
+  sun.shadow.camera.far = 500;
+  sun.shadow.normalBias = 0.03;
+  sun.shadow.intensity = 0.7; // shadows shade, they never go pitch black
+  scene.add(sun, sun.target);
+  const hemi = new THREE.HemisphereLight(0xffe3b3, 0x7a5a40, 0.95);
+  scene.add(hemi);
+
+  // Sun disc: a soft radial sprite hanging low in the sky.
+  const discCanvas = document.createElement('canvas');
+  discCanvas.width = discCanvas.height = 128;
+  const dctx = discCanvas.getContext('2d');
+  const grad = dctx.createRadialGradient(64, 64, 4, 64, 64, 64);
+  grad.addColorStop(0, 'rgba(255,240,200,1)');
+  grad.addColorStop(0.35, 'rgba(255,200,110,0.85)');
+  grad.addColorStop(1, 'rgba(255,180,90,0)');
+  dctx.fillStyle = grad;
+  dctx.fillRect(0, 0, 128, 128);
+  const discTex = new THREE.CanvasTexture(discCanvas);
+  const disc = new THREE.Sprite(new THREE.SpriteMaterial({ map: discTex, transparent: true, depthWrite: false, fog: false }));
+  disc.scale.set(180, 180, 1);
+  disc.position.set(-320, 130, -260);
+  scene.add(disc);
+
+  // A few flat clouds drifting over the bay.
+  const cloudMat = new THREE.MeshBasicMaterial({ color: 0xfff2dd, transparent: true, opacity: 0.75, fog: false });
+  const clouds = [];
+  for (let i = 0; i < 7; i += 1) {
+    const cloud = new THREE.Mesh(new THREE.PlaneGeometry(60 + i * 8, 12), cloudMat);
+    cloud.position.set(-200 + i * 65, 95 + (i % 3) * 12, -180 + (i % 2) * 90);
+    scene.add(cloud);
+    clouds.push(cloud);
+  }
+
+  // Smoke puffs: one pool, reused for hurt cars and handbrake slides.
+  const puffGeo = new THREE.PlaneGeometry(2.2, 2.2);
+  const puffMat = new THREE.MeshBasicMaterial({ color: 0x777777, transparent: true, opacity: 0.5, depthWrite: false });
+  const puffs = [];
+  for (let i = 0; i < 24; i += 1) {
+    const puff = new THREE.Mesh(puffGeo, puffMat.clone());
+    puff.visible = false;
+    scene.add(puff);
+    puffs.push({ mesh: puff, life: 0 });
+  }
+  let puffIndex = 0;
+  function spawnPuff(x, y, z) {
+    const puff = puffs[puffIndex];
+    puffIndex = (puffIndex + 1) % puffs.length;
+    puff.mesh.position.set(x, y, z);
+    puff.mesh.visible = true;
+    puff.life = 1;
+  }
+
+  const camPos = new THREE.Vector3(0, 40, 120);
+  const camTarget = new THREE.Vector3(0, 0, 0);
+
+  function updateCamera(world, dt) {
+    const player = world.player;
+    const mode = world.cameraMode;
+    if (world.shotCam) {
+      // A staged shot frames its own composition (see shots.js).
+      camPos.set(world.shotCam.x, world.shotCam.y, world.shotCam.z);
+      camTarget.set(world.shotCam.lx, world.shotCam.ly, world.shotCam.lz);
+    } else if (mode === 'title') {
+      const t = world.elapsed * 0.05;
+      camPos.set(Math.cos(t) * 130, 55, Math.sin(t) * 130);
+      camTarget.set(0, 5, 0);
+    } else if (player.inCar) {
+      const car = player.inCar;
+      const fx = Math.sin(car.heading);
+      const fz = Math.cos(car.heading);
+      const want = new THREE.Vector3(car.x - fx * 11, 4.6, car.z - fz * 11);
+      const look = new THREE.Vector3(car.x + fx * 8, 1.5, car.z + fz * 8);
+      camPos.lerp(want, Math.min(1, dt * 5));
+      camTarget.lerp(look, Math.min(1, dt * 7));
+    } else {
+      const fx = Math.sin(player.camYaw);
+      const fz = Math.cos(player.camYaw);
+      const want = new THREE.Vector3(player.x - fx * 6.5, 3.1, player.z - fz * 6.5);
+      const look = new THREE.Vector3(player.x + fx * 5, 1.4, player.z + fz * 5);
+      camPos.lerp(want, Math.min(1, dt * 6));
+      camTarget.lerp(look, Math.min(1, dt * 8));
     }
-    return text;
-  };
-}
-
-export function createRenderer(canvas) {
-  const context = canvas.getContext('2d');
-  const view = { scale: 1, x: 0, y: 0 };
-  const scoreLabel = cachedLabel('Score ');
-  const levelLabel = cachedLabel('Level ');
-  const finalLabel = cachedLabel('Score ');
-  const bestLabel = cachedLabel('Best ');
-
-  function resize() {
-    const ratio = window.devicePixelRatio || 1;
-    const width = Math.round(window.innerWidth * ratio);
-    const height = Math.round(window.innerHeight * ratio);
-    canvas.width = width;
-    canvas.height = height;
-    view.scale = Math.min(width / FIELD.width, height / FIELD.height);
-    view.x = (width - FIELD.width * view.scale) / 2;
-    view.y = (height - FIELD.height * view.scale) / 2;
+    if (world.shake > 0) {
+      const s = world.shake * 0.5;
+      camPos.x += (Math.random() - 0.5) * s;
+      camPos.y += (Math.random() - 0.5) * s;
+      world.shake = Math.max(0, world.shake - dt * 1.5);
+    }
+    camera.position.copy(camPos);
+    camera.lookAt(camTarget);
   }
 
-  const fonts = new Map();
-  function text(value, x, y, size, color, align) {
-    if (!fonts.has(size)) fonts.set(size, `${size}px ${FONT}`);
-    context.font = fonts.get(size);
-    context.fillStyle = color;
-    context.textAlign = align;
-    context.fillText(value, x, y);
-  }
-
-  function drawField(state) {
-    context.fillStyle = PALETTE.sky;
-    context.fillRect(0, 0, FIELD.width, FIELD.height);
-    context.fillStyle = PALETTE.ground;
-    context.fillRect(0, FIELD.groundY, FIELD.width, FIELD.height - FIELD.groundY);
-
-    const items = state.items;
-    for (let index = 0; index < items.length; index += 1) {
-      const item = items[index];
-      if (!item.active) continue;
-      if (item.kind === KIND_COIN) {
-        context.fillStyle = PALETTE.coin;
-        context.beginPath();
-        context.arc(item.x + item.width / 2, item.y + item.height / 2, item.width / 2, 0, Math.PI * 2);
-        context.fill();
-      } else {
-        context.fillStyle = PALETTE.block;
-        context.fillRect(item.x, item.y, item.width, item.height);
+  function updateEffects(world, dt) {
+    for (const car of world.cars) {
+      if (car.health < 40 && !car.wrecked && Math.random() < dt * 8) {
+        spawnPuff(car.x + (Math.random() - 0.5), 1.2, car.z + (Math.random() - 0.5));
+      }
+      if (car.isPlayer && world.handbrakeSmoke && Math.random() < dt * 20) {
+        spawnPuff(car.x - Math.sin(car.heading) * 1.5, 0.4, car.z - Math.cos(car.heading) * 1.5);
       }
     }
-
-    const player = state.player;
-    // Blink while invulnerable after a hit: hidden on every other tenth of a second.
-    if (player.invulnerable === 0 || Math.floor(player.invulnerable * 10) % 2 === 1) {
-      context.fillStyle = PALETTE.player;
-      context.fillRect(player.x, player.y, player.width, player.height);
+    for (const puff of puffs) {
+      if (!puff.mesh.visible) continue;
+      puff.life -= dt * 1.4;
+      puff.mesh.position.y += dt * 1.5;
+      puff.mesh.material.opacity = Math.max(0, puff.life * 0.45);
+      puff.mesh.lookAt(camera.position);
+      if (puff.life <= 0) puff.mesh.visible = false;
+    }
+    for (const cloud of clouds) {
+      cloud.position.x += dt * 0.7;
+      if (cloud.position.x > 260) cloud.position.x = -260;
     }
   }
 
-  function drawHud(state) {
-    context.textBaseline = 'top';
-    text(scoreLabel(state.score), 24, 20, 28, PALETTE.text, 'left');
-    text(levelLabel(state.level), FIELD.width / 2, 20, 28, PALETTE.text, 'center');
-    const firstLife = FIELD.width - 24 - LIVES * (LIFE_SIZE + LIFE_GAP) + LIFE_GAP;
-    text('Lives', firstLife - 12, 20, 28, PALETTE.text, 'right');
-    for (let life = 0; life < LIVES; life += 1) {
-      context.fillStyle = life < state.lives ? PALETTE.player : PALETTE.ground;
-      context.fillRect(firstLife + life * (LIFE_SIZE + LIFE_GAP), 24, LIFE_SIZE, LIFE_SIZE);
-    }
+  function onResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
   }
+  window.addEventListener('resize', onResize);
 
-  function drawPanel(title, lines, prompt) {
-    const height = PANEL.top + lines.length * PANEL.line + PANEL.bottom;
-    const x = (FIELD.width - PANEL.width) / 2;
-    const y = (FIELD.height - height) / 2;
-    context.fillStyle = PALETTE.panel;
-    context.fillRect(x, y, PANEL.width, height);
-    context.textBaseline = 'alphabetic';
-    text(title, FIELD.width / 2, y + 78, 48, PALETTE.text, 'center');
-    for (let index = 0; index < lines.length; index += 1) {
-      text(lines[index], FIELD.width / 2, y + PANEL.top + index * PANEL.line, 22, PALETTE.muted, 'center');
-    }
-    text(prompt, FIELD.width / 2, y + height - 40, 24, PALETTE.coin, 'center');
-  }
-
-  const TITLE_LINES = ['Dodge the red blocks. Catch the gold coins.', 'Move with ← → or A D.  Pause with P.', ''];
-  const PAUSED_LINES = ['The blocks will wait for you.'];
-  const OVER_LINES = ['', ''];
-
-  /** Paint one frame: the field, then the HUD or a panel for the screen the game is on. */
-  function draw(state, screen, best) {
-    context.setTransform(1, 0, 0, 1, 0, 0);
-    context.fillStyle = PALETTE.backdrop;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
-    drawField(state);
-    if (screen === SCREEN_TITLE) {
-      TITLE_LINES[2] = bestLabel(best);
-      drawPanel('Block Dodger', TITLE_LINES, 'Press Space or click to start');
-      return;
-    }
-    drawHud(state);
-    if (screen === SCREEN_PAUSED) drawPanel('Paused', PAUSED_LINES, 'Press P to resume');
-    else if (screen === SCREEN_OVER) {
-      OVER_LINES[0] = finalLabel(state.score);
-      OVER_LINES[1] = bestLabel(best);
-      drawPanel('Game over', OVER_LINES, 'Press Space or click to play again');
-    }
-  }
-
-  resize();
-  window.addEventListener('resize', resize);
-  return { draw };
+  return {
+    scene, camera, renderer,
+    updateCamera, updateEffects, onResize,
+    render() { renderer.render(scene, camera); },
+    diagnostics() {
+      return { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles };
+    },
+  };
 }
