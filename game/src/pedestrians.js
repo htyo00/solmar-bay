@@ -49,22 +49,33 @@ export function createPedMesh(shirt, skin) {
 export function createPeds(world, random, count = PED_COUNT) {
   const peds = [];
   for (let i = 0; i < count; i += 1) {
+    // Draw order matters: home block, then (walkers only) offset, heading
+    // and speed, then sidewalk edge, then walk phase, then shirt and skin.
     const homeX = pick(random, world.city.blocks);
     const homeZ = pick(random, world.city.blocks);
     const onSand = i >= count - 4; // four people stand on the sand, watching the bay
+    const px = onSand ? -60 + (i - (count - 4)) * 40 : homeX + range(random, -14, 14);
+    const pz = onSand ? 118 + (i % 2) * 6 : homeZ + 14.5;
+    const heading = onSand ? 0 : range(random, 0, Math.PI * 2);
+    const speed = onSand ? 0 : range(random, 1.0, 1.5);
+    const side = Math.floor(random() * 4); // which sidewalk edge of the block
+    const edgeT = random();
+    const phase = random() * 6;
+    const shirt = pick(random, SHIRTS);
+    const skin = pick(random, SKINS);
     const ped = {
-      x: onSand ? -60 + (i - (count - 4)) * 40 : homeX + range(random, -14, 14),
-      z: onSand ? 118 + (i % 2) * 6 : homeZ + 14.5,
-      heading: onSand ? 0 : range(random, 0, Math.PI * 2),
-      speed: onSand ? 0 : range(random, 1.0, 1.5),
+      x: px,
+      z: pz,
+      heading,
+      speed,
       state: onSand ? 'idle' : 'walk', // walk | idle | flee | fallen
       blockX: homeX, blockZ: homeZ,
-      side: Math.floor(random() * 4), // which sidewalk edge of the block
-      edgeT: random(),
+      side,
+      edgeT,
       fleeTimer: 0,
       fallenTimer: 0,
-      phase: random() * 6,
-      group: createPedMesh(pick(random, SHIRTS), pick(random, SKINS)),
+      phase,
+      group: createPedMesh(shirt, skin),
     };
     peds.push(ped);
     world.scene.add(ped.group);
@@ -74,6 +85,8 @@ export function createPeds(world, random, count = PED_COUNT) {
 
 // A scared pedestrian thrown out of a stolen car, or one who watched a crime.
 export function addFleeingPed(world, x, z) {
+  const shirt = pick(world.random, SHIRTS);
+  const skin = pick(world.random, SKINS);
   const ped = {
     x, z,
     heading: Math.atan2(x - world.player.x, z - world.player.z),
@@ -84,7 +97,7 @@ export function addFleeingPed(world, x, z) {
     fleeTimer: 3,
     fallenTimer: 0,
     phase: 0,
-    group: createPedMesh(pick(world.random, SHIRTS), pick(world.random, SKINS)),
+    group: createPedMesh(shirt, skin),
   };
   world.peds.push(ped);
   world.scene.add(ped.group);

@@ -1,8 +1,8 @@
-// The story chain Mara Voss hands Dante over the phone. Stage 1 ships job
+// The job chain Mara Voss hands Dante over the phone. Stage 1 ships job
 // one end to end — lift the Comet GT, run it to the Marina pier, shake the
-// heat, bring it in — and names the rest of the chain as jobs to come. A
-// mission is a chain of steps, each with a waypoint, an objective line, a
-// payout and a grade against the clock.
+// heat, bring it in — and names the rest of the chain as jobs to come.
+// Every job is a short chain of steps; each step has a waypoint, an
+// objective line, a payout and a grade against the clock.
 import { MISSIONS } from './config.js';
 
 // Fresh per-run mission state. The chain always opens on job one.
@@ -32,7 +32,7 @@ export function gradeFor(mission, seconds) {
   return 'C';
 }
 
-// Publish a new objective line (and its map marker) and raise the event.
+// Set a new objective line (and its map marker) and raise the event flag.
 function publishObjective(world, text, waypoint) {
   world.missions.objective = text;
   world.missions.waypoint = waypoint || null;
@@ -41,11 +41,11 @@ function publishObjective(world, text, waypoint) {
 
 export function startMission(world) {
   const ms = world.missions;
+  const comet = world.city.cometSpot;
   ms.active = true;
   ms.done = false;
   ms.step = 0;
   ms.timer = 0;
-  const comet = world.city.cometSpot;
   publishObjective(world, 'Steal the Comet GT outside the Loft', { x: comet.x, z: comet.z, label: 'Comet GT' });
   world.feed(`Mara Voss: "${MISSIONS[0].brief}"`);
 }
@@ -78,7 +78,7 @@ function finishMission(world) {
 }
 
 // One step of job one, keyed by the current step number. Returns nothing;
-// the step advances by writing ms.step and publishing the next objective.
+// a step advances by writing ms.step and publishing the next objective.
 function advanceJobOne(world, px, pz) {
   const ms = world.missions;
   const player = world.player;

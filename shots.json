@@ -1,18 +1,1 @@
-[
-  {
-    "name": "1-chase.jpg",
-    "query": "?shot=chase&seed=7"
-  },
-  {
-    "name": "2-title.jpg",
-    "query": "?shot=title&seed=7"
-  },
-  {
-    "name": "3-mission.jpg",
-    "query": "?shot=mission&seed=7"
-  },
-  {
-    "name": "4-complete.jpg",
-    "query": "?shot=complete&seed=7"
-  }
-]
+[{"name":"1-chase.jpg","query":"?shot=chase&seed=7"},{"name":"2-title.jpg","query":"?shot=title&seed=7"},{"name":"3-mission.jpg","query":"?shot=mission&seed=7"},{"name":"4-complete.jpg","query":"?shot=complete&seed=7"}]

@@ -19,7 +19,7 @@ function randomJunction(random, roads) {
   return { x: pick(random, roads), z: pick(random, roads) };
 }
 
-function chooseNextLeg(random, roads, from, avoid) {
+function pickNextLeg(random, roads, from, avoid) {
   const options = [];
   for (const delta of [-40, 40]) {
     if (roads.includes(from.x + delta)) options.push({ x: from.x + delta, z: from.z });
@@ -35,7 +35,7 @@ export function createTraffic(world, random, count = TRAFFIC_COUNT) {
   for (let i = 0; i < count; i += 1) {
     const model = pick(random, CAR_MODELS);
     const node = randomJunction(random, world.city.roads);
-    const next = chooseNextLeg(random, world.city.roads, node, null);
+    const next = pickNextLeg(random, world.city.roads, node, null);
     const car = createCar(
       model, node.x, node.z,
       Math.atan2(next.x - node.x, next.z - node.z),
@@ -53,7 +53,7 @@ export function createTraffic(world, random, count = TRAFFIC_COUNT) {
   return cars;
 }
 
-function carInFront(world, car, dist) {
+function carAhead(world, car, dist) {
   const fx = Math.sin(car.heading);
   const fz = Math.cos(car.heading);
   for (const other of world.cars) {
@@ -67,7 +67,7 @@ function carInFront(world, car, dist) {
   return null;
 }
 
-function pedInFront(world, car, dist) {
+function pedAhead(world, car, dist) {
   const fx = Math.sin(car.heading);
   const fz = Math.cos(car.heading);
   for (const ped of world.peds) {
@@ -94,9 +94,9 @@ export function stepTraffic(world, dt, random) {
     const lane = laneShift(ux, uz);
     // Slow for traffic ahead, stop for a pedestrian in the way.
     let target = car.cruise;
-    if (carInFront(world, car, 12)) target = 0;
-    else if (carInFront(world, car, 22)) target = car.cruise * 0.4;
-    if (pedInFront(world, car, 7)) target = 0;
+    if (carAhead(world, car, 12)) target = 0;
+    else if (carAhead(world, car, 22)) target = car.cruise * 0.4;
+    if (pedAhead(world, car, 7)) target = 0;
     if (target === 0) {
       car.blockedTimer += dt;
       if (car.blockedTimer > 2.5 && random() < dt * 0.4) {
@@ -110,7 +110,7 @@ export function stepTraffic(world, dt, random) {
     car.edgeT += (car.speed * dt) / edgeLen;
     if (car.edgeT >= 1) {
       car.edgeFrom = to;
-      car.edgeTo = chooseNextLeg(random, world.city.roads, to, from);
+      car.edgeTo = pickNextLeg(random, world.city.roads, to, from);
       car.edgeT = 0;
     }
     const t = Math.min(1, car.edgeT);
@@ -121,7 +121,7 @@ export function stepTraffic(world, dt, random) {
     const playerDist = Math.hypot(car.x - world.player.x, car.z - world.player.z);
     if (playerDist > 170) {
       const node = randomJunction(random, world.city.roads);
-      const next = chooseNextLeg(random, world.city.roads, node, null);
+      const next = pickNextLeg(random, world.city.roads, node, null);
       car.edgeFrom = node;
       car.edgeTo = next;
       car.edgeT = 0;

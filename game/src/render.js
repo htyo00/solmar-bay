@@ -4,11 +4,12 @@
 // and by car — plus the smoke puffs that mark a hurt car or a handbrake slide.
 import * as THREE from 'three';
 
-// Vertical gradient for the sky dome: deep indigo overhead fading to a
-// magenta neon glow at the horizon, so the night reads as city air.
-function makeSkyTexture() {
+// Sky dome gradient, painted top to bottom: deep indigo overhead fading to
+// a magenta neon glow at the horizon, so the night reads as city air.
+function skyTexture() {
   const canvas = document.createElement('canvas');
-  canvas.width = 4; canvas.height = 256;
+  canvas.width = 4;
+  canvas.height = 256;
   const ctx = canvas.getContext('2d');
   const grad = ctx.createLinearGradient(0, 0, 0, 256);
   grad.addColorStop(0, '#0b1030');
@@ -23,10 +24,11 @@ function makeSkyTexture() {
   return tex;
 }
 
-// Pale radial glow used for the moon disc and its halo.
-function makeGlowTexture() {
+// Pale radial glow, reused for the moon disc and its halo.
+function glowTexture() {
   const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 128;
+  canvas.width = 128;
+  canvas.height = 128;
   const ctx = canvas.getContext('2d');
   const grad = ctx.createRadialGradient(64, 64, 4, 64, 64, 64);
   grad.addColorStop(0, 'rgba(240,246,255,1)');
@@ -71,7 +73,7 @@ export function createRender(canvas) {
   scene.add(hemi);
 
   // Sky dome wrapping the whole city in the gradient texture.
-  const skyTex = makeSkyTexture();
+  const skyTex = skyTexture();
   const sky = new THREE.Mesh(
     new THREE.SphereGeometry(700, 24, 16),
     new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, fog: false }),
@@ -82,10 +84,11 @@ export function createRender(canvas) {
   // car paint, glass and wet asphalt reflect neon instead of looking plastic.
   {
     const envScene = new THREE.Scene();
-    envScene.add(new THREE.Mesh(
+    const envSky = new THREE.Mesh(
       new THREE.SphereGeometry(50, 16, 12),
       new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide }),
-    ));
+    );
+    envScene.add(envSky);
     const envMoon = new THREE.Mesh(
       new THREE.SphereGeometry(4, 12, 8),
       new THREE.MeshBasicMaterial({ color: 0xe8f0ff }),
@@ -98,7 +101,7 @@ export function createRender(canvas) {
   }
 
   // Moon disc: a pale radial sprite hanging high in the sky.
-  const glowTex = makeGlowTexture();
+  const glowTex = glowTexture();
   const disc = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, transparent: true, depthWrite: false, fog: false }));
   disc.scale.set(120, 120, 1);
   disc.position.set(-320, 190, -260);

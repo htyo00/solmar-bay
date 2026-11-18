@@ -1,6 +1,6 @@
 // The deterministic screenshot scenes behind ?shot=chase|title|mission|complete.
 //
-// Every scene plays the real rules forward from a fresh world for a fixed
+// Each scene plays the real rules forward from a fresh world for a fixed
 // number of steps, so the frame is a moment of genuine play — not a mockup —
 // and the same seed always paints the same frame. The loop then paints it
 // twice and raises window.__shotReady.
@@ -9,7 +9,7 @@ import { createCar } from './vehicles.js';
 import { resetWorld, stepWorld } from './world.js';
 
 // An input that never presses anything: staged scenes drive themselves.
-const idleInput = {
+const noInput = {
   forward: () => false,
   back: () => false,
   left: () => false,
@@ -21,8 +21,8 @@ const idleInput = {
   takeActions: () => 0,
 };
 
-// Put Dante in a car at a spot, facing a heading, rolling at a speed.
-function seatDriver(world, car, x, z, heading, speed) {
+// Seat Dante in a car at a spot, facing a heading, rolling at a speed.
+function putDriver(world, car, x, z, heading, speed) {
   car.isPlayer = true;
   car.x = x;
   car.z = z;
@@ -34,8 +34,8 @@ function seatDriver(world, car, x, z, heading, speed) {
   world.player.z = z;
 }
 
-// A cruiser on the player's tail, already rolling.
-function tailCruiser(world, x, z, heading, speed) {
+// A cruiser already on the player's tail, rolling at speed.
+function addTail(world, x, z, heading, speed) {
   const car = createCar(POLICE_CAR, x, z, heading, { isPolice: true });
   car.speed = speed;
   world.police.cars.push(car);
@@ -45,16 +45,16 @@ function tailCruiser(world, x, z, heading, speed) {
 }
 
 // Roll the staged world forward with the throttle held down.
-function cruise(world, seconds) {
+function driveForward(world, seconds) {
   const steps = Math.round(seconds / STEP);
   for (let i = 0; i < steps; i += 1) {
-    stepWorld(world, STEP, idleInput, { throttle: 1, steer: 0, handbrake: false });
+    stepWorld(world, STEP, noInput, { throttle: 1, steer: 0, handbrake: false });
   }
 }
 
 // Frame the camera over the player's shoulder: (dx, dy, dz) is where the
 // camera sits relative to the car, (ax, ay, az) is where it looks.
-function overShoulder(world, dx, dy, dz, ax, ay, az) {
+function shoulderCam(world, dx, dy, dz, ax, ay, az) {
   const car = world.player.inCar;
   world.shotCam = {
     x: car.x + dx, y: dy, z: car.z + dz,
@@ -78,27 +78,27 @@ export function stageShot(name, world) {
   if (name === 'title') {
     world.cameraMode = 'title';
     world.elapsed = 40; // a fixed orbit angle: downtown + the bay behind the logo
-    for (let i = 0; i < 30; i += 1) stepWorld(world, STEP, idleInput, null);
+    for (let i = 0; i < 30; i += 1) stepWorld(world, STEP, noInput, null);
     return 'title';
   }
 
   if (name === 'mission') {
     // On the street, not the sidewalk: east down the Hills avenue toward the bay.
-    seatDriver(world, comet, -58, -60, Math.PI / 2, 12);
+    putDriver(world, comet, -58, -60, Math.PI / 2, 12);
     world.wanted.stars = 1;
-    tailCruiser(world, -72, -60, Math.PI / 2, 14);
+    addTail(world, -72, -60, Math.PI / 2, 14);
     world.missions.active = true;
     world.missions.step = 1;
     world.missions.objective = 'Drive the Comet GT to the Marina pier';
     world.missions.waypoint = { x: world.city.pier.x, z: world.city.pier.z, label: 'Marina pier' };
     world.feed('Mara Voss: "Take the Hills avenue down to the pier. Don\'t scratch her."');
-    cruise(world, 1.5);
-    overShoulder(world, -8, 4, 9, 12, 1.5, -2);
+    driveForward(world, 1.5);
+    shoulderCam(world, -8, 4, 9, 12, 1.5, -2);
     return 'play';
   }
 
   if (name === 'complete') {
-    seatDriver(world, comet, world.city.pier.x, world.city.pier.z - 6, Math.PI, 0);
+    putDriver(world, comet, world.city.pier.x, world.city.pier.z - 6, Math.PI, 0);
     world.saveMissionResult = {
       mission: 'FIRST JOB',
       grade: 'S',
@@ -115,11 +115,11 @@ export function stageShot(name, world) {
   // dusk: the Comet GT westbound under the SOLMAR BAY arch, 4 stars, the
   // heli's searchlight overhead, two cruisers on its tail, HUD complete.
   world.save.cash = 7420; // a mid-game state: big cash, real variable
-  seatDriver(world, comet, 44, 100, -Math.PI / 2, 28);
+  putDriver(world, comet, 44, 100, -Math.PI / 2, 28);
   world.wanted.stars = 4;
   world.police.heliAngle = Math.PI; // heli ahead-west, in frame over the arch
-  tailCruiser(world, 56, 102, -Math.PI / 2, 28);
-  tailCruiser(world, 62, 98, -Math.PI / 2, 28);
+  addTail(world, 56, 102, -Math.PI / 2, 28);
+  addTail(world, 62, 98, -Math.PI / 2, 28);
   // Clear the shot corridor: no traffic car may sit in the hero's path.
   for (const car of world.traffic) {
     if (Math.abs(car.z - 100) < 8 && car.x > -20 && car.x < 70) {
@@ -133,7 +133,7 @@ export function stageShot(name, world) {
   world.missions.waypoint = { x: world.city.pier.x, z: world.city.pier.z, label: 'Marina pier' };
   world.feed('SBPD: vehicle theft reported in Ocean Drive. Units responding.');
   world.feed('Mara Voss: "Lose them first, then deliver."');
-  cruise(world, 0.6);
-  overShoulder(world, 9, 3.8, 8, -12, 1.5, -2);
+  driveForward(world, 0.6);
+  shoulderCam(world, 9, 3.8, 8, -12, 1.5, -2);
   return 'play';
 }

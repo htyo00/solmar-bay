@@ -1,3 +1,9 @@
 # Dossier output, rebuilt by `MAKEFUN_OUTPUT_DIR=out node main.ts` — never committed
 out/
 out2/
+out-*/
+dist/
+build/
+node_modules/
+.DS_Store
+*.log

@@ -1,13 +1,16 @@
 // SOLMAR BAY — the city itself: a 5x5 block grid, four named districts, a
-// beachfront boulevard and a marina pier. This module is pure data plus the
-// meshes built from it; the road graph drives traffic, police and the minimap.
-// District palettes are Golden Hour / Sunset Boulevard (theme-factory).
+// beachfront boulevard and a marina pier. This module holds the city data
+// plus the meshes built from it; the road graph drives traffic, police and
+// the minimap. District palettes are Golden Hour / Sunset Boulevard
+// (theme-factory). NOTE: the seeded draws in createCity run in a fixed
+// order — buildings, then props, then containers — because one seed must
+// always rebuild the same city.
 import * as THREE from 'three';
 import { CITY, PALETTE } from './config.js';
 import { pick, range } from './random.js';
 
-// Per-district look: wall colour, accent colour, height band, buildings
-// per block. Downtown towers; the Marina stays low and pale.
+// The look of each district: wall colour, accent colour, height band,
+// buildings per block. Downtown towers; the Marina stays low and pale.
 const DISTRICTS = {
   downtown: { name: 'Downtown', base: '#d4b896', accent: '#f4a900', minH: 25, maxH: 58, per: 1 },
   marina: { name: 'Marina', base: '#f5ead6', accent: '#2a9d8f', minH: 6, maxH: 12, per: 2 },
@@ -32,12 +35,12 @@ export function districtAt(bx, bz) {
 function paintWindow(ctx, random, x, y, accent) {
   ctx.fillStyle = 'rgba(40,30,25,0.85)'; // frame
   ctx.fillRect(x - 1, y - 1, 14, 14);
-  const lit = random() < 0.65; // night: most windows glow warm
-  if (lit) {
-    const g = ctx.createLinearGradient(x, y, x, y + 12);
-    g.addColorStop(0, '#ffd98a');
-    g.addColorStop(1, accent);
-    ctx.fillStyle = g;
+  const glowing = random() < 0.65; // night: most windows glow warm
+  if (glowing) {
+    const wash = ctx.createLinearGradient(x, y, x, y + 12);
+    wash.addColorStop(0, '#ffd98a');
+    wash.addColorStop(1, accent);
+    ctx.fillStyle = wash;
   } else {
     ctx.fillStyle = random() < 0.5 ? '#2e4256' : '#23282e'; // reflective glass
     ctx.fillRect(x, y, 12, 12);

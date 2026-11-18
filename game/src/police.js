@@ -9,14 +9,14 @@ import { nextNodeToward, nearestRoad } from './city.js';
 import { pick } from './random.js';
 
 export function createPolice(world) {
-  const heli = makeHeliFigure();
+  const heli = buildHeliFigure();
   heli.visible = false;
   world.scene.add(heli);
   return {
     cars: [], // interceptor cars; also tracked in world.cars
     footCops: [], // { x, z, heading, phase, grabTimer, group }
     roadblock: [], // parked interceptors forming a block
-    // Where Dante was last seen by a cruiser (see driveCruiser below).
+    // Where Dante was last seen by a cruiser (see chaseCruiser below).
     lastSeen: null,
     // Seconds left of the HOT trail: a fresh crime, or a cruiser that just
     // saw Dante, means the SBPD holds a live fix — lastSeen tracks his
@@ -28,7 +28,7 @@ export function createPolice(world) {
   };
 }
 
-function makeFootCopFigure() {
+function buildFootCopFigure() {
   const group = new THREE.Group();
   const navy = new THREE.MeshStandardMaterial({ color: 0x1d3557, roughness: 0.8 });
   const skin = new THREE.MeshStandardMaterial({ color: 0xd4b896, roughness: 0.7 });
@@ -56,7 +56,7 @@ function makeFootCopFigure() {
   return group;
 }
 
-function makeHeliFigure() {
+function buildHeliFigure() {
   const group = new THREE.Group();
   const hullMat = new THREE.MeshStandardMaterial({ color: 0x1d3557, roughness: 0.5, metalness: 0.4 });
   const darkMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.6 });
@@ -91,7 +91,7 @@ function makeHeliFigure() {
 }
 
 // A road intersection far enough from Dante to spawn a cruiser at.
-function farSpawnJunction(world, random) {
+function distantJunction(world, random) {
   const grid = world.city.roads;
   for (let attempt = 0; attempt < 12; attempt += 1) {
     const x = pick(random, grid);
@@ -102,8 +102,8 @@ function farSpawnJunction(world, random) {
   return { x: nearestRoad(world.player.x + 80), z: nearestRoad(world.player.z) };
 }
 
-function launchCruiser(world, random) {
-  const node = farSpawnJunction(world, random);
+function dispatchCruiser(world, random) {
+  const node = distantJunction(world, random);
   const car = createCar(POLICE_CAR, node.x, node.z, 0, { isPolice: true });
   car.topSpeedBoost = world.difficulty.policeSpeed;
   world.police.cars.push(car);
@@ -120,7 +120,7 @@ function turnDelta(a, b) {
   return delta;
 }
 
-function driveCruiser(world, car, dt, random) {
+function chaseCruiser(world, car, dt, random) {
   const suspect = world.player;
   const sx = suspect.inCar ? suspect.inCar.x : suspect.x;
   const sz = suspect.inCar ? suspect.inCar.z : suspect.z;
@@ -239,7 +239,7 @@ function driveCruiser(world, car, dt, random) {
       heading: 0,
       phase: 0,
       grabTimer: 0,
-      group: makeFootCopFigure(),
+      group: buildFootCopFigure(),
     };
     cop.group.position.set(cop.x, 0, cop.z);
     world.police.footCops.push(cop);
@@ -248,7 +248,7 @@ function driveCruiser(world, car, dt, random) {
   }
 }
 
-function moveFootCops(world, dt) {
+function stepFootCops(world, dt) {
   let events = 0;
   const suspect = world.player;
   for (const cop of world.police.footCops) {
@@ -283,7 +283,7 @@ function moveFootCops(world, dt) {
   return events;
 }
 
-function manageRoadblock(world, dt) {
+function updateRoadblock(world) {
   const stars = world.wanted.stars;
   if (stars >= WANTED.roadblockAt && world.police.roadblock.length === 0) {
     const suspect = world.player;
@@ -314,7 +314,7 @@ function manageRoadblock(world, dt) {
   }
 }
 
-function flyHeli(world, dt) {
+function circleHeli(world, dt) {
   const stars = world.wanted.stars;
   const heli = world.police.heli;
   if (stars < WANTED.heliAt) {
@@ -348,11 +348,15 @@ export function stepPolice(world, dt, random) {
   // trail goes cold (no visual contact for hotSeconds) lastSeen freezes
   // and the pack searches the last-seen spot instead of homing perfectly
   // — that freeze is what lets a fast driver break contact and lose the
-  // heat. Visual contact (inside loseDistance) re-heats the trail.
+  // heat. Visual contact re-heats the trail — and it takes REAL contact:
+  // the re-heat radius is hotRefreshDistance (20), not loseDistance (40),
+  // because with five cruisers out one of them is nearly always inside
+  // 40 units, which used to re-heat the pursuit forever and made five
+  // stars effectively un-losable.
   const px = world.player.inCar ? world.player.inCar.x : world.player.x;
   const pz = world.player.inCar ? world.player.inCar.z : world.player.z;
   const anyClose = world.police.cars.some(
-    (c) => Math.hypot(c.x - px, c.z - pz) < WANTED.loseDistance,
+    (c) => Math.hypot(c.x - px, c.z - pz) < WANTED.hotRefreshDistance,
   );
   if (anyClose) {
     world.police.hotTimer = WANTED.hotSeconds;
@@ -363,7 +367,7 @@ export function stepPolice(world, dt, random) {
 
   world.police.spawnTimer -= dt;
   while (world.police.cars.length < want && world.police.spawnTimer <= 0) {
-    launchCruiser(world, random);
+    dispatchCruiser(world, random);
     world.police.spawnTimer = 1.5;
   }
 
@@ -379,9 +383,9 @@ export function stepPolice(world, dt, random) {
     world.police.cars.splice(world.police.cars.indexOf(far), 1);
   }
 
-  for (const car of world.police.cars) driveCruiser(world, car, dt, random);
-  events |= moveFootCops(world, dt);
-  manageRoadblock(world, dt);
-  flyHeli(world, dt);
+  for (const car of world.police.cars) chaseCruiser(world, car, dt, random);
+  events |= stepFootCops(world, dt);
+  updateRoadblock(world);
+  circleHeli(world, dt);
   return events;
 }

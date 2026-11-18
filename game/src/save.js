@@ -1,7 +1,8 @@
-// Persistence through localStorage: pocket cash, how far along the mission
-// chain Dante is, cars in the garage, best run and difficulty. Every access
-// is wrapped, because a private window or a mangled save must never crash
-// the game — worst case, Dante just starts fresh.
+// Save data lives in localStorage: pocket cash, the mission chain's
+// progress, garage cars, best run and difficulty. A save file can be
+// missing, half-written or hostile (private mode, corrupted JSON), so
+// every read and write is guarded — the worst outcome is Dante starting
+// over with a fresh wallet, never a crash.
 
 import { SAVE_KEY } from './config.js';
 
@@ -18,20 +19,24 @@ export function defaultSave() {
 }
 
 export function loadSave() {
+  const fresh = defaultSave();
+  let text = null;
   try {
-    const raw = window.localStorage.getItem(SAVE_KEY);
-    if (!raw) return defaultSave();
-    const stored = JSON.parse(raw);
-    const blank = defaultSave();
-    return {
-      ...blank,
-      ...stored,
-      stats: { ...blank.stats, ...(stored.stats || {}) },
-      carsOwned: Array.isArray(stored.carsOwned) ? stored.carsOwned : [],
-    };
+    text = window.localStorage.getItem(SAVE_KEY);
   } catch {
-    return defaultSave();
+    return fresh;
   }
+  if (!text) return fresh;
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return fresh;
+  }
+  if (!parsed || typeof parsed !== 'object') return fresh;
+  const mergedStats = { ...fresh.stats, ...(parsed.stats || {}) };
+  const garage = Array.isArray(parsed.carsOwned) ? parsed.carsOwned : [];
+  return { ...fresh, ...parsed, stats: mergedStats, carsOwned: garage };
 }
 
 export function writeSave(save) {

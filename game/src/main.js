@@ -1,15 +1,14 @@
-// Solmar Bay — boot and the one loop.
+// Solmar Bay — startup and the single game loop.
 //
-// One module owns the screens and the clock: it reads input once per frame,
-// advances the world in fixed 1/60 s slices (up to eight per frame, so a
-// slow frame never spirals), and asks the renderer to paint the result. The
-// game lives on seven screens — title, play, paused, map, complete, busted,
-// wasted — and the same module serves the deterministic screenshot scenes:
-// ?shot=chase|title|mission|complete (plus &seed=N) stages a scene, paints
-// it twice, and raises window.__shotReady.
+// This file boots the game and owns the clock. Each animation frame it
+// samples the keyboard once, pushes the world forward in 1/60 s slices, and
+// hands the result to the renderer. Seven screens live here — title, play,
+// paused, map, complete, busted, wasted — and so do the staged screenshot
+// scenes: ?shot=chase|title|mission|complete (with &seed=N) builds a scene,
+// paints it twice, and sets window.__shotReady.
 //
-// ?seed=N pins the city and the traffic to one layout; without it the seed
-// is drawn at random.
+// ?seed=N pins the city and its traffic to one layout; with no seed the
+// layout is drawn at random.
 import { STEP } from './config.js';
 import {
   createWorld,
@@ -36,17 +35,22 @@ import { createAudio } from './audio.js';
 import { writeSave } from './save.js';
 import { stageShot } from './shots.js';
 
-// A frame longer than this is treated as a quarter of a second, so a hitch
-// can never fast-forward the simulation.
-const MAX_DT = 0.25;
-// How many fixed steps one frame may run before the leftover time is dropped.
-const MAX_STEPS_PER_FRAME = 8;
+// A frame longer than this is treated as half a second: on a slow machine
+// one real frame can last ~0.5 s, and clamping it any lower would make
+// game-time run at half the speed of wall-time. The simulation still
+// advances in fixed 1/60 s slices, so a hitch never breaks the physics;
+// on a 60 FPS machine this changes nothing.
+const MAX_DT = 0.5;
+// How many fixed slices one frame may spend before the leftover is
+// thrown away. 30/60 = 0.5 s, the same as MAX_DT, so a frame that was
+// clamped at the cap can be fully consumed instead of half-dropped.
+const MAX_STEPS_PER_FRAME = 30;
 
-const query = new URLSearchParams(window.location.search);
-const shotName = query.get('shot');
-const seedRaw = Number.parseInt(query.get('seed') ?? '', 10);
-const seed = Number.isInteger(seedRaw)
-  ? seedRaw
+const params = new URLSearchParams(window.location.search);
+const shotName = params.get('shot');
+const seedText = Number.parseInt(params.get('seed') ?? '', 10);
+const seed = Number.isInteger(seedText)
+  ? seedText
   : Math.floor(Math.random() * 4294967296);
 
 const canvas = document.getElementById('game');
@@ -58,8 +62,8 @@ const input = createInput();
 const audio = createAudio();
 window.__solmar = { world, render };
 
-// The screens the game moves between.
-const S = {
+// Every screen the game can sit on.
+const SCREEN = {
   title: 'title',
   play: 'play',
   paused: 'paused',
@@ -69,34 +73,38 @@ const S = {
   wasted: 'wasted',
 };
 
-function say(text) {
+function showStatus(text) {
   statusLine.textContent = text;
 }
 
-// Getting caught or killed costs a tenth of the cash on hand.
-function forfeitCash() {
+// Getting caught or killed costs a tenth of the cash Dante carries.
+function takeCashCut() {
   const cut = Math.round(world.save.cash * 0.1);
   world.save.cash = Math.max(0, world.save.cash - cut);
   return cut;
 }
 
-// ---- screenshot mode -----------------------------------------------------
+// ---- staged screenshots --------------------------------------------------
 
-function runShot(name) {
+function playScreenshot(name) {
   const screen = stageShot(name, world);
   hud.show(
-    screen === S.title ? 'title-screen' : screen === S.complete ? 'complete-screen' : null,
+    screen === SCREEN.title
+      ? 'title-screen'
+      : screen === SCREEN.complete
+        ? 'complete-screen'
+        : null,
   );
-  if (screen === S.title) hud.setTitle(world.save);
-  if (screen === S.complete && world.saveMissionResult) {
+  if (screen === SCREEN.title) hud.setTitle(world.save);
+  if (screen === SCREEN.complete && world.saveMissionResult) {
     hud.setComplete(world.saveMissionResult);
   }
-  // A staged scene never runs the live loop, so sync the HUD once by hand.
+  // A staged scene never runs the live loop, so the HUD is synced by hand.
   hud.update(world, 1 / 60);
   let painted = 0;
   const paint = () => {
-    // Snap the camera straight to its target: the chase lerp would take
-    // many frames to settle, and a screenshot gets two.
+    // Point the camera straight at its target: the chase lerp would need
+    // many frames to settle, and a screenshot only gets two.
     render.updateCamera(world, 1);
     render.updateEffects(world, 1 / 60);
     render.render();
@@ -107,97 +115,100 @@ function runShot(name) {
   requestAnimationFrame(paint);
 }
 
-// ---- live game -----------------------------------------------------------
+// ---- the live game -------------------------------------------------------
 
-function runGame() {
-  let screen = S.title;
+function playLive() {
+  let screen = SCREEN.title;
   let leftover = 0;
   let lastTime = performance.now();
-  let frameCount = 0;
-  let fpsClock = 0;
+  let framesSeen = 0;
+  let fpsWindow = 0;
 
-  function beginJob() {
+  function startJob() {
     audio.unlock();
     resetWorld(world);
     startMission(world);
-    screen = S.play;
+    screen = SCREEN.play;
     hud.show(null);
-    say('First job. Steal the Comet GT outside the Loft.');
+    showStatus('First job. Steal the Comet GT outside the Loft.');
   }
 
-  function backToTitle() {
+  function goTitle() {
     resetWorld(world);
     world.cameraMode = 'title';
-    screen = S.title;
+    screen = SCREEN.title;
     hud.setTitle(world.save);
     hud.show('title-screen');
-    say('Solmar Bay. Press Enter to start.');
+    showStatus('Solmar Bay. Press Enter to start.');
   }
 
-  function endRun(kind) {
+  function finishRun(kind) {
     const busted = kind === 'busted';
     world.save.stats[busted ? 'busted' : 'wasted'] += 1;
-    const cut = forfeitCash();
+    const cut = takeCashCut();
     writeSave(world.save);
-    screen = busted ? S.busted : S.wasted;
+    screen = busted ? SCREEN.busted : SCREEN.wasted;
     hud.setEnd(busted ? 'busted' : 'wasted', cut);
     hud.show(busted ? 'busted-screen' : 'wasted-screen');
-    say(
+    showStatus(
       busted
         ? 'Busted. The SBPD took you in.'
         : 'Wasted. You woke up at St. Marina Hospital.',
     );
   }
 
-  function handleActions() {
+  function handlePresses() {
     const pressed = input.takeActions();
     if (pressed & ACTION_MUTE) {
       const muted = audio.toggleMute();
       world.feed(muted ? 'Sound off.' : 'Sound on.');
     }
-    if (pressed & ACTION_RESTART && (screen === S.play || screen === S.paused)) {
-      beginJob();
+    if (pressed & ACTION_RESTART && (screen === SCREEN.play || screen === SCREEN.paused)) {
+      startJob();
       return;
     }
-    if (pressed & ACTION_CONFIRM && screen === S.title) {
-      beginJob();
+    if (pressed & ACTION_CONFIRM && screen === SCREEN.title) {
+      startJob();
       return;
     }
-    if (pressed & ACTION_CONFIRM && (screen === S.complete || screen === S.busted || screen === S.wasted)) {
-      beginJob();
+    if (
+      pressed & ACTION_CONFIRM
+      && (screen === SCREEN.complete || screen === SCREEN.busted || screen === SCREEN.wasted)
+    ) {
+      startJob();
       return;
     }
-    if (pressed & ACTION_MAP && screen === S.play) {
-      screen = S.map;
+    if (pressed & ACTION_MAP && screen === SCREEN.play) {
+      screen = SCREEN.map;
       hud.showMap(world);
       hud.show('map-screen');
-      say('City map. Tab to close.');
+      showStatus('City map. Tab to close.');
       return;
     }
-    if (pressed & (ACTION_MAP | ACTION_PAUSE | ACTION_CONFIRM) && screen === S.map) {
-      screen = S.play;
+    if (pressed & (ACTION_MAP | ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN.map) {
+      screen = SCREEN.play;
       hud.show(null);
-      say('Playing.');
+      showStatus('Playing.');
       return;
     }
-    if (pressed & ACTION_PAUSE && screen === S.play) {
-      screen = S.paused;
+    if (pressed & ACTION_PAUSE && screen === SCREEN.play) {
+      screen = SCREEN.paused;
       hud.show('pause-screen');
-      say('Paused.');
-    } else if (pressed & (ACTION_PAUSE | ACTION_CONFIRM) && screen === S.paused) {
-      screen = S.play;
+      showStatus('Paused.');
+    } else if (pressed & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN.paused) {
+      screen = SCREEN.play;
       hud.show(null);
-      say('Playing.');
+      showStatus('Playing.');
     }
   }
 
   function advance() {
-    if (screen === S.title) {
-      // The title floats over a living city: traffic and pedestrians move.
+    if (screen === SCREEN.title) {
+      // The title floats above a living city: traffic and pedestrians move.
       stepWorld(world, STEP, input, null);
       return;
     }
-    if (screen !== S.play) return;
+    if (screen !== SCREEN.play) return;
     const events = stepWorld(world, STEP, input, null);
     if (world.lastImpact > 8) audio.crash();
     if (events & EVENT_OBJECTIVE) audio.mission();
@@ -207,48 +218,48 @@ function runGame() {
     }
     if (events & EVENT_COMPLETE) {
       writeSave(world.save);
-      screen = S.complete;
+      screen = SCREEN.complete;
       hud.setComplete(world.saveMissionResult);
       hud.show('complete-screen');
       audio.mission();
-      say(`Job done. Grade ${world.saveMissionResult.grade}.`);
+      showStatus(`Job done. Grade ${world.saveMissionResult.grade}.`);
     } else if (events & EVENT_BUSTED) {
-      endRun('busted');
+      finishRun('busted');
     } else if (events & EVENT_WASTED) {
       // Dante wakes at the Loft, health restored, heat gone.
       world.player.health = 100;
-      endRun('wasted');
+      finishRun('wasted');
     }
-    // The engine and siren mix follow the car and the closest cruiser.
+    // The engine and siren mix follow the car and the nearest cruiser.
     const kmh = world.player.inCar ? Math.abs(world.player.inCar.speed) * 3.6 : 0;
-    let closestCop = Infinity;
+    let nearestCop = Infinity;
     for (const cruiser of world.police.cars) {
-      closestCop = Math.min(
-        closestCop,
+      nearestCop = Math.min(
+        nearestCop,
         Math.hypot(cruiser.x - world.player.x, cruiser.z - world.player.z),
       );
     }
-    audio.update(kmh, closestCop);
+    audio.update(kmh, nearestCop);
   }
 
   function frame(now) {
     requestAnimationFrame(frame);
     const dt = Math.min((now - lastTime) / 1000, MAX_DT);
     lastTime = now;
-    frameCount += 1;
-    fpsClock += dt;
-    if (fpsClock >= 1) {
-      world.fpsSample = Math.round(frameCount / fpsClock);
-      frameCount = 0;
-      fpsClock = 0;
+    framesSeen += 1;
+    fpsWindow += dt;
+    if (fpsWindow >= 1) {
+      world.fpsSample = Math.round(framesSeen / fpsWindow);
+      framesSeen = 0;
+      fpsWindow = 0;
     }
     leftover += dt;
-    handleActions();
-    if (screen === S.title || screen === S.play) {
+    handlePresses();
+    if (screen === SCREEN.title || screen === SCREEN.play) {
       let ran = 0;
       while (
         leftover >= STEP
-        && (screen === S.title || screen === S.play)
+        && (screen === SCREEN.title || screen === SCREEN.play)
         && ran < MAX_STEPS_PER_FRAME
       ) {
         advance();
@@ -265,23 +276,23 @@ function runGame() {
     render.render();
   }
 
-  // Buttons on the menu screens.
-  document.getElementById('btn-play').addEventListener('click', () => { audio.unlock(); beginJob(); });
-  document.getElementById('btn-continue').addEventListener('click', () => { audio.unlock(); beginJob(); });
-  document.getElementById('btn-resume').addEventListener('click', () => { screen = S.play; hud.show(null); });
-  document.getElementById('btn-restart-mission').addEventListener('click', () => beginJob());
-  document.getElementById('btn-save-quit').addEventListener('click', () => { writeSave(world.save); backToTitle(); });
-  document.getElementById('btn-replay').addEventListener('click', () => beginJob());
+  // The buttons on the menu screens.
+  document.getElementById('btn-play').addEventListener('click', () => { audio.unlock(); startJob(); });
+  document.getElementById('btn-continue').addEventListener('click', () => { audio.unlock(); startJob(); });
+  document.getElementById('btn-resume').addEventListener('click', () => { screen = SCREEN.play; hud.show(null); });
+  document.getElementById('btn-restart-mission').addEventListener('click', () => startJob());
+  document.getElementById('btn-save-quit').addEventListener('click', () => { writeSave(world.save); goTitle(); });
+  document.getElementById('btn-replay').addEventListener('click', () => startJob());
   document.getElementById('btn-continue-2').addEventListener('click', () => {
-    screen = S.play;
+    screen = SCREEN.play;
     hud.show(null);
     world.missions.active = false;
     world.missions.objective = 'Free roam — press Enter to run the next job.';
   });
-  document.getElementById('btn-retry').addEventListener('click', () => beginJob());
-  document.getElementById('btn-retry-2').addEventListener('click', () => beginJob());
-  document.getElementById('btn-to-title').addEventListener('click', () => backToTitle());
-  document.getElementById('btn-to-title-2').addEventListener('click', () => backToTitle());
+  document.getElementById('btn-retry').addEventListener('click', () => startJob());
+  document.getElementById('btn-retry-2').addEventListener('click', () => startJob());
+  document.getElementById('btn-to-title').addEventListener('click', () => goTitle());
+  document.getElementById('btn-to-title-2').addEventListener('click', () => goTitle());
   for (const button of document.querySelectorAll('.diff-btn')) {
     button.addEventListener('click', () => {
       world.save.difficulty = button.dataset.diff;
@@ -294,20 +305,21 @@ function runGame() {
     button.classList.toggle('active', button.dataset.diff === world.save.difficulty);
   }
 
-  // Leaving the tab pauses a running game rather than letting the heat build unseen.
+  // Leaving the tab pauses a running game instead of letting the heat
+  // build up unseen.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && screen === S.play) {
-      screen = S.paused;
+    if (document.hidden && screen === SCREEN.play) {
+      screen = SCREEN.paused;
       hud.show('pause-screen');
-      say('Paused.');
+      showStatus('Paused.');
     }
   });
 
   hud.setTitle(world.save);
   hud.show('title-screen');
-  say('Solmar Bay. Press Enter to start.');
+  showStatus('Solmar Bay. Press Enter to start.');
   requestAnimationFrame(frame);
 }
 
-if (shotName) runShot(shotName);
-else runGame();
+if (shotName) playScreenshot(shotName);
+else playLive();

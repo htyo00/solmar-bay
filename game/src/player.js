@@ -7,7 +7,7 @@ import { PLAYER } from './config.js';
 import { collideBuildings } from './city.js';
 import { stepCar } from './vehicles.js';
 
-function addPart(group, geo, mat, x, y, z) {
+function part(group, geo, mat, x, y, z) {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.set(x, y, z);
   group.add(mesh);
@@ -22,21 +22,21 @@ export function createPlayerMesh() {
   const jeans = new THREE.MeshStandardMaterial({ color: 0x2a3a4a, roughness: 0.9 });
   const hairMat = new THREE.MeshStandardMaterial({ color: 0x1a1210, roughness: 0.9 });
   const shoeMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.6 });
-  const torso = addPart(group, new THREE.BoxGeometry(0.7, 0.9, 0.4), jacket, 0, 1.15, 0);
+  const torso = part(group, new THREE.BoxGeometry(0.7, 0.9, 0.4), jacket, 0, 1.15, 0);
   torso.castShadow = true;
-  addPart(group, new THREE.BoxGeometry(0.3, 0.7, 0.06), shirt, 0, 1.18, 0.21); // open jacket, white shirt
-  const head = addPart(group, new THREE.SphereGeometry(0.26, 10, 8), skin, 0, 1.85, 0);
+  part(group, new THREE.BoxGeometry(0.3, 0.7, 0.06), shirt, 0, 1.18, 0.21); // open jacket, white shirt
+  const head = part(group, new THREE.SphereGeometry(0.26, 10, 8), skin, 0, 1.85, 0);
   head.castShadow = true;
-  addPart(group, new THREE.BoxGeometry(0.5, 0.18, 0.5), hairMat, 0, 2.06, 0);
-  const armL = addPart(group, new THREE.BoxGeometry(0.2, 0.75, 0.24), jacket, -0.46, 1.15, 0);
+  part(group, new THREE.BoxGeometry(0.5, 0.18, 0.5), hairMat, 0, 2.06, 0);
+  const armL = part(group, new THREE.BoxGeometry(0.2, 0.75, 0.24), jacket, -0.46, 1.15, 0);
   const armR = armL.clone();
   armR.position.x = 0.46;
   group.add(armR);
-  const legL = addPart(group, new THREE.BoxGeometry(0.26, 0.8, 0.3), jeans, -0.18, 0.4, 0);
+  const legL = part(group, new THREE.BoxGeometry(0.26, 0.8, 0.3), jeans, -0.18, 0.4, 0);
   const legR = legL.clone();
   legR.position.x = 0.18;
   group.add(legR);
-  const shoeL = addPart(group, new THREE.BoxGeometry(0.28, 0.12, 0.42), shoeMat, -0.18, 0.06, 0.05);
+  const shoeL = part(group, new THREE.BoxGeometry(0.28, 0.12, 0.42), shoeMat, -0.18, 0.06, 0.05);
   const shoeR = shoeL.clone();
   shoeR.position.x = 0.18;
   group.add(shoeR);

@@ -125,9 +125,8 @@ export function createHud() {
       ctx.fillStyle = '#f5ead6';
       ctx.font = `bold ${Math.round(13 * S)}px system-ui, sans-serif`;
       ctx.textAlign = 'center';
-      for (const [name, x, z] of [['DOWNTOWN', 0, 0], ['HILLS', 0, -80], ['PORT', -80, 0], ['MARINA', 80, 80], ['OCEAN DRIVE', 0, 112]]) {
-        ctx.fillText(name, mx(x), mz(z));
-      }
+      const labelSpots = [['DOWNTOWN', 0, 0], ['HILLS', 0, -80], ['PORT', -80, 0], ['MARINA', 80, 80], ['OCEAN DRIVE', 0, 112]];
+      for (const [name, x, z] of labelSpots) ctx.fillText(name, mx(x), mz(z));
     }
   }
 
@@ -207,7 +206,8 @@ export function createHud() {
     const mz = (z) => (z + 100) * S + oy;
     ctx.clearRect(0, 0, size, size);
     ctx.save();
-    if (size <= 220) {
+    const round = size <= 220;
+    if (round) {
       ctx.beginPath();
       ctx.arc(size / 2, size / 2, 96, 0, Math.PI * 2);
       ctx.clip();
@@ -215,7 +215,7 @@ export function createHud() {
     paintGround(ctx, size, S, ox, oy, labels, mx, mz);
     paintLive(ctx, world, S, mx, mz);
     ctx.restore();
-    if (size <= 220) {
+    if (round) {
       ctx.strokeStyle = '#f4a900';
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -263,8 +263,9 @@ export function createHud() {
     const m = world.missions;
     const mission = MISSIONS[m.index];
     missionTitleEl.textContent = `MISSION ${m.index + 1}/6 — ${mission.name}`;
-    missionStageEl.innerHTML = [0, 1, 2, 3].map((i) =>
-      `<span class="seg${i < m.step + 1 ? ' on' : ''}"></span>`).join('') + `<span class="step-label">STEP ${Math.min(m.step + 1, 4)}/4</span>`;
+    const segs = [0, 1, 2, 3].map((i) =>
+      `<span class="seg${i < m.step + 1 ? ' on' : ''}"></span>`).join('');
+    missionStageEl.innerHTML = segs + `<span class="step-label">STEP ${Math.min(m.step + 1, 4)}/4</span>`;
     missionNextEl.textContent = m.index + 1 < MISSIONS.length
       ? `NEXT: MISSION ${m.index + 2} — ${MISSIONS[m.index + 1].name}` : 'NEXT: THE LAST JOB';
   }
@@ -334,69 +335,83 @@ export function createHud() {
     }
   }
 
+  function tick(world, dt) {
+    starsEl.innerHTML = starString(world.wanted.stars, world.wanted.blinking, world.elapsed);
+    cashEl.textContent = `$${world.save.cash.toLocaleString('en-US')}`;
+    refreshObjective(world, dt);
+    refreshFeed(world);
+    refreshMissionCard(world);
+    refreshPolicePanel(world);
+    refreshDialogue(world);
+    refreshMeters(world);
+    refreshPrompt(world);
+    drawMinimap(world);
+    if (world.fpsSample !== null) fpsEl.textContent = `${world.fpsSample} FPS`;
+  }
+
+  function showScreen(id) {
+    const screens = ['title-screen', 'pause-screen', 'complete-screen', 'busted-screen', 'wasted-screen', 'map-screen'];
+    for (const screen of screens) $(screen).classList.toggle('show', screen === id);
+    $('hud').classList.toggle('show', id === null);
+  }
+
+  function showMap(world) {
+    drawMap(bigCtx, world, 520, 1.9, 40, 16, true);
+    const rep = repInfo(world.save);
+    const rows = [
+      `STORY — ${world.save.stats.missionsDone}/6 jobs done`,
+      `CASH — $${world.save.cash.toLocaleString('en-US')}`,
+      `REP ${rep.level} — ${rep.title}`,
+      `COPS LOST — ${world.save.stats.copsLost}`,
+      `CARS STOLEN — ${world.save.stats.carsStolen}`,
+      `BAY COINS — ${world.save.stats.coins}/8`,
+      `BEST GRADE — ${world.save.bestGrade || '—'}${world.save.bestTime ? ` in ${world.save.bestTime}s` : ''}`,
+    ];
+    const missionRows = MISSIONS.map((mis, i) => {
+      const mark = i < world.save.stats.missionsDone ? '✓' : i === world.save.stats.missionsDone ? '▶' : '🔒';
+      return `<div>${mark} ${i + 1}. ${mis.name} — ${mis.fixer}</div>`;
+    }).join('');
+    $('map-stats').innerHTML = rows.map((r) => `<div>${r}</div>`).join('')
+      + `<div class="map-missions">${missionRows}</div>`;
+  }
+
+  function setTitle(save) {
+    $('spec-line').textContent = '6 MISSIONS · 8 CARS · 5 DISTRICTS · 8 BAY COINS · 5 WANTED LEVELS · 3 DIFFICULTIES';
+    const rep = repInfo(save);
+    $('best-line').textContent = save.bestGrade
+      ? `Best run: grade ${save.bestGrade} in ${save.bestTime}s — $${save.cash.toLocaleString('en-US')} in the pocket. REP ${rep.level} ${rep.title} · Coins ${save.stats.coins}/8.`
+      : 'No jobs run yet. The city is waiting.';
+    $('btn-continue').style.display = save.stats.missionsDone > 0 ? '' : 'none';
+  }
+
+  function setComplete(result) {
+    $('grade').textContent = result.grade;
+    $('grade').className = `grade-big grade-${result.grade}`;
+    const mins = Math.floor(result.seconds / 60);
+    const secs = Math.round(result.seconds % 60);
+    const lines = [
+      `Time — ${mins}:${String(secs).padStart(2, '0')}`,
+      `Payout — $${result.payout.toLocaleString('en-US')}`,
+      `Cars stolen — ${result.stats.carsStolen}`,
+      `Top speed — ${Math.round(result.stats.topSpeed)} km/h`,
+      `Garage — ${(result.garage || []).join(', ') || 'empty'}`,
+    ];
+    $('complete-stats').innerHTML = lines.map((line) => `<div>${line}</div>`).join('');
+    $('next-mission').textContent = 'NEXT: MISSION 2 — THE GETAWAY (Stage 2)';
+  }
+
+  function setEnd(kind, lost) {
+    $(`${kind}-text`).textContent = kind === 'busted'
+      ? `The SBPD took you in. You lost $${lost.toLocaleString('en-US')}.`
+      : `You woke up at St. Marina Hospital. You lost $${lost.toLocaleString('en-US')}.`;
+  }
+
   return {
-    update(world, dt) {
-      const player = world.player;
-      starsEl.innerHTML = starString(world.wanted.stars, world.wanted.blinking, world.elapsed);
-      cashEl.textContent = `$${world.save.cash.toLocaleString('en-US')}`;
-      refreshObjective(world, dt);
-      refreshFeed(world);
-      refreshMissionCard(world);
-      refreshPolicePanel(world);
-      refreshDialogue(world);
-      refreshMeters(world);
-      refreshPrompt(world);
-      drawMinimap(world);
-      if (world.fpsSample !== null) fpsEl.textContent = `${world.fpsSample} FPS`;
-    },
-    show(id) {
-      for (const screen of ['title-screen', 'pause-screen', 'complete-screen', 'busted-screen', 'wasted-screen', 'map-screen']) {
-        $(screen).classList.toggle('show', screen === id);
-      }
-      $('hud').classList.toggle('show', id === null);
-    },
-    showMap(world) {
-      drawMap(bigCtx, world, 520, 1.9, 40, 16, true);
-      const rep = repInfo(world.save);
-      const rows = [
-        `STORY — ${world.save.stats.missionsDone}/6 jobs done`,
-        `CASH — $${world.save.cash.toLocaleString('en-US')}`,
-        `REP ${rep.level} — ${rep.title}`,
-        `COPS LOST — ${world.save.stats.copsLost}`,
-        `CARS STOLEN — ${world.save.stats.carsStolen}`,
-        `BAY COINS — ${world.save.stats.coins}/8`,
-        `BEST GRADE — ${world.save.bestGrade || '—'}${world.save.bestTime ? ` in ${world.save.bestTime}s` : ''}`,
-      ];
-      $('map-stats').innerHTML = rows.map((r) => `<div>${r}</div>`).join('')
-        + '<div class="map-missions">' + MISSIONS.map((mis, i) =>
-          `<div>${i < world.save.stats.missionsDone ? '✓' : i === world.save.stats.missionsDone ? '▶' : '🔒'} ${i + 1}. ${mis.name} — ${mis.fixer}</div>`).join('') + '</div>';
-    },
-    setTitle(save) {
-      $('spec-line').textContent = '6 MISSIONS · 8 CARS · 5 DISTRICTS · 8 BAY COINS · 5 WANTED LEVELS · 3 DIFFICULTIES';
-      const rep = repInfo(save);
-      $('best-line').textContent = save.bestGrade
-        ? `Best run: grade ${save.bestGrade} in ${save.bestTime}s — $${save.cash.toLocaleString('en-US')} in the pocket. REP ${rep.level} ${rep.title} · Coins ${save.stats.coins}/8.`
-        : 'No jobs run yet. The city is waiting.';
-      $('btn-continue').style.display = save.stats.missionsDone > 0 ? '' : 'none';
-    },
-    setComplete(result) {
-      $('grade').textContent = result.grade;
-      $('grade').className = `grade-big grade-${result.grade}`;
-      const mins = Math.floor(result.seconds / 60);
-      const secs = Math.round(result.seconds % 60);
-      $('complete-stats').innerHTML = [
-        `Time — ${mins}:${String(secs).padStart(2, '0')}`,
-        `Payout — $${result.payout.toLocaleString('en-US')}`,
-        `Cars stolen — ${result.stats.carsStolen}`,
-        `Top speed — ${Math.round(result.stats.topSpeed)} km/h`,
-        `Garage — ${(result.garage || []).join(', ') || 'empty'}`,
-      ].map((line) => `<div>${line}</div>`).join('');
-      $('next-mission').textContent = 'NEXT: MISSION 2 — THE GETAWAY (Stage 2)';
-    },
-    setEnd(kind, lost) {
-      $(`${kind}-text`).textContent = kind === 'busted'
-        ? `The SBPD took you in. You lost $${lost.toLocaleString('en-US')}.`
-        : `You woke up at St. Marina Hospital. You lost $${lost.toLocaleString('en-US')}.`;
-    },
+    update: tick,
+    show: showScreen,
+    showMap,
+    setTitle,
+    setComplete,
+    setEnd,
   };
 }

@@ -77,7 +77,7 @@ export function createWorld(seed, scene) {
   scene.add(createCityMeshes(city, random));
   world.player = createPlayer(city);
   scene.add(world.player.group);
-  placeParkedCars(world, random);
+  parkCars(world, random);
   world.traffic = createTraffic(world, random);
   for (const car of world.traffic) scene.add(car.group);
   world.peds = createPeds(world, random);
@@ -88,7 +88,7 @@ export function createWorld(seed, scene) {
 }
 
 // The Comet GT at its scripted spot, plus one random parked car per spot.
-function placeParkedCars(world, random) {
+function parkCars(world, random) {
   const comet = createCar(
     CAR_MODELS[0],
     world.city.cometSpot.x,
@@ -106,7 +106,7 @@ function placeParkedCars(world, random) {
 }
 
 // Take every police unit off the street and forget the chase.
-function sweepPolice(world) {
+function clearPolice(world) {
   for (const car of world.police.cars) {
     world.scene.remove(car.group);
     world.cars.splice(world.cars.indexOf(car), 1);
@@ -141,14 +141,14 @@ export function resetWorld(world) {
   player.group.visible = true;
   player.group.position.set(player.x, 0, player.z);
 
-  sweepPolice(world);
+  clearPolice(world);
 
   // Parked cars back to their spots, traffic respawned fresh.
   for (const car of world.cars) world.scene.remove(car.group);
   world.cars = [];
   for (const car of world.traffic) world.scene.remove(car.group);
   world.traffic = [];
-  placeParkedCars(world, world.random);
+  parkCars(world, world.random);
   world.traffic = createTraffic(world, world.random);
   for (const car of world.traffic) world.scene.add(car.group);
 
@@ -181,7 +181,7 @@ export function resetWorld(world) {
 }
 
 // Bay Coins (+$25) and armour vests (+50, on foot only) under the player.
-function collectPickups(world) {
+function grabPickups(world) {
   const player = world.player;
   const px = player.inCar ? player.inCar.x : player.x;
   const pz = player.inCar ? player.inCar.z : player.z;
@@ -238,7 +238,7 @@ export function stepWorld(world, dt, input, driveOverride) {
     player.prevSteal = input.steal();
   }
 
-  collectPickups(world);
+  grabPickups(world);
   events |= stepTraffic(world, dt, world.random);
   events |= stepPeds(world, dt);
   events |= stepPolice(world, dt, world.random);
