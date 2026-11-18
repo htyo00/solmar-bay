@@ -1,139 +1,71 @@
-// Traffic: AI cars driving the road graph on the right-hand side of the
-// road. They follow their lane, slow for the car ahead, stop for a
-// pedestrian or a crash in front of them, honk when blocked, and respawn
-// far away when the player leaves them behind.
-import { CAR_MODELS, TRAFFIC_COUNT } from './config.js';
-import { createCar, stepCar } from './vehicles.js';
-import { nearestRoad } from './city.js';
-import { pick, range } from './random.js';
+// Ambient traffic: cars that follow the road grid and brake for trouble.
+import { CFG } from './config.js';
+import { roadRoute, nearestLine } from './city.js';
+import { angleDiff, dist2 } from './random.js';
+import { createCar, driveCar } from './vehicles.js';
+import { makeRng, range, pick } from './random.js';
 
-/** Lane offset for a direction of travel (right-hand traffic). */
-function laneShift(dx, dz) {
-  if (dx > 0) return { x: 0, z: 2.2 };
-  if (dx < 0) return { x: 0, z: -2.2 };
-  if (dz > 0) return { x: -2.2, z: 0 };
-  return { x: 2.2, z: 0 };
-}
+const TYPES = ['sedan', 'sedan', 'taxi', 'van', 'truck', 'sedan'];
 
-function randomJunction(random, roads) {
-  return { x: pick(random, roads), z: pick(random, roads) };
-}
-
-function pickNextLeg(random, roads, from, avoid) {
-  const options = [];
-  for (const delta of [-40, 40]) {
-    if (roads.includes(from.x + delta)) options.push({ x: from.x + delta, z: from.z });
-    if (roads.includes(from.z + delta)) options.push({ x: from.x, z: from.z + delta });
-  }
-  const usable = options.filter((o) => !(avoid && o.x === avoid.x && o.z === avoid.z));
-  const pool = usable.length > 0 ? usable : options;
-  return pick(random, pool);
-}
-
-export function createTraffic(world, random, count = TRAFFIC_COUNT) {
+export function createTraffic(G) {
+  const rng = makeRng(777001);
   const cars = [];
-  for (let i = 0; i < count; i += 1) {
-    const model = pick(random, CAR_MODELS);
-    const node = randomJunction(random, world.city.roads);
-    const next = pickNextLeg(random, world.city.roads, node, null);
-    const car = createCar(
-      model, node.x, node.z,
-      Math.atan2(next.x - node.x, next.z - node.z),
-      { isTraffic: true },
-    );
-    car.driver = { name: 'driver' };
-    car.edgeFrom = node;
-    car.edgeTo = next;
-    car.edgeT = 0;
-    car.cruise = range(random, 9, 13);
-    car.blockedTimer = 0;
+  for (let i = 0; i < CFG.trafficCars; i++) {
+    const x = pick(rng, CFG.roadLines);
+    const z = pick(rng, CFG.roadLines);
+    const car = createCar(G, pick(rng, TYPES), x + range(rng, -3, 3), z + range(rng, -3, 3), pick(rng, [0, Math.PI / 2, Math.PI, -Math.PI / 2]));
+    car.cruise = range(rng, 9, 14);
+    car.route = null;
+    car.wait = range(rng, 0, 2);
     cars.push(car);
-    world.cars.push(car);
   }
-  return cars;
-}
 
-function carAhead(world, car, dist) {
-  const fx = Math.sin(car.heading);
-  const fz = Math.cos(car.heading);
-  for (const other of world.cars) {
-    if (other === car || other.wrecked) continue;
-    const dx = other.x - car.x;
-    const dz = other.z - car.z;
-    const along = dx * fx + dz * fz;
-    const side = Math.abs(dx * fz - dz * fx);
-    if (along > 0 && along < dist && side < 2.5) return other;
+  function reRoute(car) {
+    const tx = pick(rng, CFG.roadLines) + range(rng, -2, 2);
+    const tz = pick(rng, CFG.roadLines) + range(rng, -2, 2);
+    car.route = roadRoute(car.pos.x, car.pos.z, tx, tz);
   }
-  return null;
-}
 
-function pedAhead(world, car, dist) {
-  const fx = Math.sin(car.heading);
-  const fz = Math.cos(car.heading);
-  for (const ped of world.peds) {
-    if (ped.state === 'fallen') continue;
-    const dx = ped.x - car.x;
-    const dz = ped.z - car.z;
-    const along = dx * fx + dz * fz;
-    const side = Math.abs(dx * fz - dz * fx);
-    if (along > 0 && along < dist && side < 2) return ped;
+  function blockedAhead(car) {
+    // anything slow right in front of us on the same road?
+    const fx = -Math.sin(car.heading), fz = -Math.cos(car.heading);
+    const all = [G.player.car, ...cars, ...G.police.cruisers].filter(Boolean);
+    for (const o of all) {
+      if (o === car) continue;
+      const dx = o.pos.x - car.pos.x, dz = o.pos.z - car.pos.z;
+      const ahead = dx * fx + dz * fz;
+      if (ahead > 0 && ahead < 9 && Math.abs(dx * fz - dz * fx) < 3.2) return true;
+    }
+    return false;
   }
-  return null;
-}
 
-export function stepTraffic(world, dt, random) {
-  for (const car of world.traffic) {
-    if (car.isPlayer || car.wrecked) continue;
-    const from = car.edgeFrom;
-    const to = car.edgeTo;
-    const dx = to.x - from.x;
-    const dz = to.z - from.z;
-    const edgeLen = Math.hypot(dx, dz) || 1;
-    const ux = dx / edgeLen;
-    const uz = dz / edgeLen;
-    const lane = laneShift(ux, uz);
-    // Slow for traffic ahead, stop for a pedestrian in the way.
-    let target = car.cruise;
-    if (carAhead(world, car, 12)) target = 0;
-    else if (carAhead(world, car, 22)) target = car.cruise * 0.4;
-    if (pedAhead(world, car, 7)) target = 0;
-    if (target === 0) {
-      car.blockedTimer += dt;
-      if (car.blockedTimer > 2.5 && random() < dt * 0.4) {
-        world.feed('Traffic: a driver leans on the horn near Ocean Drive.');
+  function update(dt) {
+    for (const car of cars) {
+      if (car.wait > 0) { car.wait -= dt; continue; }
+      if (!car.route || car.route.length === 0) reRoute(car);
+      const wp = car.route[0];
+      const dx = wp.x - car.pos.x, dz = wp.z - car.pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 4) { car.route.shift(); continue; }
+      const desired = Math.atan2(-dx, -dz);
+      const steer = Math.max(-1, Math.min(1, angleDiff(car.heading, desired) * 1.6));
+      const blocked = blockedAhead(car);
+      const target = blocked ? 0 : Math.min(car.cruise, car.top);
+      const throttle = car.speed < target ? 0.7 : 0;
+      driveCar(G, car, dt, { throttle, steer, nitro: false, brake: blocked });
+      // running over Dante on foot hurts
+      if (!G.player.inCar && G.player.health > 0) {
+        if (dist2(car.pos.x, car.pos.z, G.player.pos.x, G.player.pos.z) < 7) {
+          if (!car.hitCd || car.hitCd <= 0) {
+            car.hitCd = 0.9;
+            G.player.takeDamage(14, 'run over');
+            G.hud.flash('HIT BY TRAFFIC');
+          }
+        }
       }
-      car.blockedTimer = Math.min(car.blockedTimer, 4);
-    } else {
-      car.blockedTimer = 0;
+      if (car.hitCd > 0) car.hitCd -= dt;
     }
-    car.speed += (target - car.speed) * Math.min(1, dt * 1.5);
-    car.edgeT += (car.speed * dt) / edgeLen;
-    if (car.edgeT >= 1) {
-      car.edgeFrom = to;
-      car.edgeTo = pickNextLeg(random, world.city.roads, to, from);
-      car.edgeT = 0;
-    }
-    const t = Math.min(1, car.edgeT);
-    car.x = from.x + dx * t + lane.x;
-    car.z = from.z + dz * t + lane.z;
-    car.heading = Math.atan2(ux, uz);
-    // Far from the player? Respawning keeps the streets alive around Dante.
-    const playerDist = Math.hypot(car.x - world.player.x, car.z - world.player.z);
-    if (playerDist > 170) {
-      const node = randomJunction(random, world.city.roads);
-      const next = pickNextLeg(random, world.city.roads, node, null);
-      car.edgeFrom = node;
-      car.edgeTo = next;
-      car.edgeT = 0;
-      car.x = node.x;
-      car.z = node.z;
-      car.speed = car.cruise;
-    }
-    car.group.position.set(car.x, 0, car.z);
-    car.group.rotation.y = car.heading;
-    const spin = (car.speed * dt) / 0.36;
-    car.group.userData.wheels.forEach((wheel) => { wheel.rotation.x += spin; });
   }
-}
 
-export { stepCar };
+  return { cars, update };
+}

@@ -1,80 +1,61 @@
-// Brawling without bullets, for now: this module covers what happens when
-// metal meets flesh — Dante getting clipped by traffic, his ride smashing
-// into a cruiser, and the smoke that pours out of a dying engine. There are
-// no firearms in this build, so every wound here comes from a collision.
-import { PLAYER } from './config.js';
+// Combat: fists on foot, cars as weapons. Punching a cop is a bad idea.
+import { dist2 } from './random.js';
 
-// Hurt Dante by `hit` points, blaming `how` in the feed if it kills him.
-// Answers true only when the hit wastes him.
-export function damagePlayer(world, hit, how) {
-  const dante = world.player;
-  if (dante.inCar) {
-    // Seated in a ride, the bodywork takes the blow instead — twice as hard,
-    // but the player's own car is unbreakable by design (see vehicles.js),
-    // so a crash can never send him to the hospital on its own.
-    const ride = dante.inCar;
-    ride.health -= hit * 2;
-    if (ride.health <= 0) ride.health = 15;
-    return false;
-  }
-  // On foot the vest eats the blow first, and health only takes what is left.
-  const eaten = Math.min(dante.armor, hit);
-  dante.armor -= eaten;
-  dante.health -= hit - eaten;
-  world.shake = Math.min(1, world.shake + hit / 40);
-  if (dante.health > 0) return false;
-  dante.health = 0;
-  world.events |= 64; // EVENT_WASTED
-  world.feed(`WASTED — ${how}. The hospital bill stings.`);
-  return true;
-}
+export function createCombat(G) {
+  let cd = 0;
 
-/**
- * Run once per step, after the cars have moved. Three jobs: spot Dante
- * deliberately ramming a cruiser, spot traffic running Dante down while he
- * is on foot, and tick down the smoke timers of battered cars. The flags it
- * returns mirror the WASTED bit the caller needs.
- */
-export function resolveCombat(world, dt) {
-  let flags = 0;
-  const dante = world.player;
-  if (dante.inCar) {
-    const ride = dante.inCar;
-    for (const cruiser of world.police.cars) {
-      const gapX = cruiser.x - ride.x;
-      const gapZ = cruiser.z - ride.z;
-      const gap = Math.hypot(gapX, gapZ);
-      const speedGap = Math.abs(ride.speed - cruiser.speed);
-      // Which way is Dante actually travelling relative to the cruiser?
-      // Heading alone lies: a parked Comet facing an oncoming cruiser is the
-      // victim, not the rammer. (Probe 2 caught the old heading-only rule
-      // handing out stars 1 -> 5 to a pinned, stationary Comet that cruisers
-      // kept smashing into head-on.)
-      const along = (Math.sin(ride.heading) * gapX + Math.cos(ride.heading) * gapZ) / (gap || 1);
-      const drivingAt = Math.abs(ride.speed) > 3 ? Math.sign(ride.speed) * along : -1;
-      if (gap < 4 && speedGap > 8 && drivingAt > 0.3) {
-        world.crime('ramCop');
-        world.shake = Math.min(1, world.shake + 0.5);
-      }
+  function punch() {
+    if (cd > 0 || G.player.inCar) return;
+    cd = 0.45;
+    G.audio.punch();
+    const p = G.player.pos;
+    const fx = -Math.sin(G.player.heading), fz = -Math.cos(G.player.heading);
+    // nearest ped in front
+    let best = null, bd = 2.4 * 2.4;
+    for (const ped of G.peds.peds) {
+      if (ped.down > 0) continue;
+      const dx = ped.pos.x - p.x, dz = ped.pos.z - p.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < bd && dx * fx + dz * fz > 0) { best = ped; bd = d2; }
     }
-  } else {
-    for (const traffic of world.cars) {
-      if (traffic.wrecked || traffic.isPlayer) continue;
-      const gap = Math.hypot(traffic.x - dante.x, traffic.z - dante.z);
-      if (gap < 1.3 && Math.abs(traffic.speed) > 4) {
-        if (damagePlayer(world, 25, 'run over by a car')) flags |= 64;
-        traffic.speed *= 0.5;
-        break;
+    if (best) {
+      best.down = 6;
+      G.wanted.addStars(1);
+      G.hud.flash('ASSAULT — 1 STAR');
+      return;
+    }
+    // nearest foot cop in front
+    for (const cop of G.police.foot) {
+      const dx = cop.pos.x - p.x, dz = cop.pos.z - p.z;
+      if (dx * dx + dz * dz < 6 && dx * fx + dz * fz > 0) {
+        G.wanted.addStars(1);
+        G.hud.flash('YOU HIT A COP — 1 STAR');
+        return;
       }
     }
   }
-  // A car that is wrecked or badly hurt puffs smoke until it is repaired;
-  // the renderer turns the timer into visible puffs.
-  for (const traffic of world.cars) {
-    if (traffic.health < 40 && !traffic.wrecked) traffic.smokeTimer -= dt;
-    else traffic.smokeTimer = 0;
-  }
-  return flags;
-}
 
-export { PLAYER };
+  function update(dt) {
+    if (cd > 0) cd -= dt;
+    // the player's car running over a ped: they go down, the law notices
+    if (G.player.inCar && G.player.car) {
+      const c = G.player.car;
+      if (Math.abs(c.speed) > 4) {
+        for (const ped of G.peds.peds) {
+          if (ped.down > 0) continue;
+          if (dist2(c.pos.x, c.pos.z, ped.pos.x, ped.pos.z) < 6.5) {
+            ped.down = 8;
+            if (!c.pedCd || c.pedCd <= 0) {
+              c.pedCd = 2;
+              G.wanted.addStars(1);
+              G.hud.flash('PEDESTRIAN DOWN — 1 STAR');
+            }
+          }
+        }
+      }
+      if (c.pedCd > 0) c.pedCd -= dt;
+    }
+  }
+
+  return { punch, update };
+}

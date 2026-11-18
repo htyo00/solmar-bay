@@ -1,325 +1,267 @@
-// Solmar Bay — startup and the single game loop.
-//
-// This file boots the game and owns the clock. Each animation frame it
-// samples the keyboard once, pushes the world forward in 1/60 s slices, and
-// hands the result to the renderer. Seven screens live here — title, play,
-// paused, map, complete, busted, wasted — and so do the staged screenshot
-// scenes: ?shot=chase|title|mission|complete (with &seed=N) builds a scene,
-// paints it twice, and sets window.__shotReady.
-//
-// ?seed=N pins the city and its traffic to one layout; with no seed the
-// layout is drawn at random.
-import { STEP } from './config.js';
-import {
-  createWorld,
-  resetWorld,
-  stepWorld,
-  startMission,
-  EVENT_COMPLETE,
-  EVENT_BUSTED,
-  EVENT_WASTED,
-  EVENT_OBJECTIVE,
-  EVENT_STEAL,
-} from './world.js';
+// Solmar Bay bootstrap: builds the world, runs the fixed-step loop,
+// owns the state machine (title / play / map / pause / busted / wasted).
+import { CFG } from './config.js';
+import { PLACES } from './city.js';
 import { createRender } from './render.js';
-import { createHud } from './hud.js';
-import {
-  createInput,
-  ACTION_CONFIRM,
-  ACTION_PAUSE,
-  ACTION_MUTE,
-  ACTION_RESTART,
-  ACTION_MAP,
-} from './input.js';
+import { buildWorld } from './world.js';
+import { createInput } from './input.js';
 import { createAudio } from './audio.js';
-import { writeSave } from './save.js';
-import { stageShot } from './shots.js';
-
-// A frame longer than this is treated as half a second: on a slow machine
-// one real frame can last ~0.5 s, and clamping it any lower would make
-// game-time run at half the speed of wall-time. The simulation still
-// advances in fixed 1/60 s slices, so a hitch never breaks the physics;
-// on a 60 FPS machine this changes nothing.
-const MAX_DT = 0.5;
-// How many fixed slices one frame may spend before the leftover is
-// thrown away. 30/60 = 0.5 s, the same as MAX_DT, so a frame that was
-// clamped at the cap can be fully consumed instead of half-dropped.
-const MAX_STEPS_PER_FRAME = 30;
-
-const params = new URLSearchParams(window.location.search);
-const shotName = params.get('shot');
-const seedText = Number.parseInt(params.get('seed') ?? '', 10);
-const seed = Number.isInteger(seedText)
-  ? seedText
-  : Math.floor(Math.random() * 4294967296);
+import { loadSave, storeSave } from './save.js';
+import { createPlayer } from './player.js';
+import { createCar, driveCar } from './vehicles.js';
+import { createTraffic } from './traffic.js';
+import { createPeds } from './pedestrians.js';
+import { createPolice } from './police.js';
+import { createWanted } from './wanted.js';
+import { createMissions } from './missions.js';
+import { createCombat } from './combat.js';
+import { createHud } from './hud.js';
+import { applyShot } from './shots.js';
 
 const canvas = document.getElementById('game');
-const statusLine = document.getElementById('status');
-const render = createRender(canvas);
-const world = createWorld(seed, render.scene);
-const hud = createHud();
-const input = createInput();
-const audio = createAudio();
-window.__solmar = { world, render };
+const R = createRender(canvas);
+const G = {
+  time: 0,
+  state: 'title',
+  camOrbit: 0,
+  fps: 0,
+  errors: [],
+  shotMode: false,
+  scene: R.scene,
+  save: loadSave(),
+};
+G.storeSave = () => storeSave(G.save);
+G.input = createInput();
+G.audio = createAudio();
+G.world = buildWorld(R.scene);
+G.player = createPlayer(G);
+G.traffic = createTraffic(G);
+G.peds = createPeds(G);
+G.police = createPolice(G);
+G.wanted = createWanted(G);
+G.missions = createMissions(G);
+G.combat = createCombat(G);
+G.hud = createHud(G);
+G.render = R;
 
-// Every screen the game can sit on.
-const SCREEN = {
-  title: 'title',
-  play: 'play',
-  paused: 'paused',
-  map: 'map',
-  complete: 'complete',
-  busted: 'busted',
-  wasted: 'wasted',
+// the Comet GT + a few parked cars worth stealing
+const comet = createCar(G, 'comet', PLACES.cometSpawn.x, PLACES.cometSpawn.z, PLACES.cometSpawn.heading);
+G.missions.comet = comet;
+G.cars = [comet];
+const parkedSpots = [
+  ['sedan', -100, 52, 0], ['taxi', 100, -48, Math.PI / 2], ['van', -52, 200, Math.PI],
+  ['sedan', 52, -200, -Math.PI / 2], ['taxi', -200, -52, 0], ['sedan', 148, 100, Math.PI],
+];
+for (const [type, x, z, h] of parkedSpots) G.cars.push(createCar(G, type, x, z, h));
+
+G.onBusted = () => {
+  if (G.state === 'busted') return;
+  if (G.player.inCar) G.player.stepOut();
+  G.state = 'busted';
+  G.save.busted += 1;
+  G.save.cash = Math.max(0, G.save.cash - CFG.bustFine);
+  G.storeSave();
+  G.wanted.stars = 0;
+  G.wanted.searching = false;
+  G.police.standDown();
+  G.audio.busted();
+  G.hud.showBusted();
+};
+G.onWasted = () => {
+  if (G.state === 'wasted') return;
+  if (G.player.inCar) G.player.stepOut();
+  G.state = 'wasted';
+  G.save.wasted += 1;
+  G.save.cash = Math.max(0, G.save.cash - CFG.wastedFine);
+  G.storeSave();
+  G.wanted.stars = 0;
+  G.wanted.searching = false;
+  G.police.standDown();
+  G.audio.busted();
+  G.hud.showWasted();
 };
 
-function showStatus(text) {
-  statusLine.textContent = text;
+function respawn(at) {
+  G.player.pos.x = at.x;
+  G.player.pos.z = at.z;
+  G.player.heading = 0;
+  G.player.speed = 0;
+  G.player.health = CFG.maxHealth;
+  G.player.armor = 40;
+  G.state = 'play';
+  G.hud.hideOverlays();
+  G.audio.click();
 }
 
-// Getting caught or killed costs a tenth of the cash Dante carries.
-function takeCashCut() {
-  const cut = Math.round(world.save.cash * 0.1);
-  world.save.cash = Math.max(0, world.save.cash - cut);
-  return cut;
+function tryEnterCar() {
+  const p = G.player.pos;
+  let best = null, bd = 16;
+  for (const c of G.cars) {
+    const dx = c.pos.x - p.x, dz = c.pos.z - p.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < bd) { best = c; bd = d2; }
+  }
+  if (!best) return;
+  G.player.inCar = true;
+  G.player.car = best;
+  G.audio.pickup();
+  if (best !== comet) G.wanted.addStars(1);
 }
 
-// ---- staged screenshots --------------------------------------------------
-
-function playScreenshot(name) {
-  const screen = stageShot(name, world);
-  hud.show(
-    screen === SCREEN.title
-      ? 'title-screen'
-      : screen === SCREEN.complete
-        ? 'complete-screen'
-        : null,
-  );
-  if (screen === SCREEN.title) hud.setTitle(world.save);
-  if (screen === SCREEN.complete && world.saveMissionResult) {
-    hud.setComplete(world.saveMissionResult);
+function interact() {
+  if (G.player.inCar) {
+    G.player.stepOut();
+    G.audio.click();
+  } else {
+    tryEnterCar();
   }
-  // A staged scene never runs the live loop, so the HUD is synced by hand.
-  hud.update(world, 1 / 60);
-  let painted = 0;
-  const paint = () => {
-    // Point the camera straight at its target: the chase lerp would need
-    // many frames to settle, and a screenshot only gets two.
-    render.updateCamera(world, 1);
-    render.updateEffects(world, 1 / 60);
-    render.render();
-    painted += 1;
-    if (painted < 2) requestAnimationFrame(paint);
-    else window.__shotReady = true;
-  };
-  requestAnimationFrame(paint);
 }
 
-// ---- the live game -------------------------------------------------------
-
-function playLive() {
-  let screen = SCREEN.title;
-  let leftover = 0;
-  let lastTime = performance.now();
-  let framesSeen = 0;
-  let fpsWindow = 0;
-
-  function startJob() {
-    audio.unlock();
-    resetWorld(world);
-    startMission(world);
-    screen = SCREEN.play;
-    hud.show(null);
-    showStatus('First job. Steal the Comet GT outside the Loft.');
-  }
-
-  function goTitle() {
-    resetWorld(world);
-    world.cameraMode = 'title';
-    screen = SCREEN.title;
-    hud.setTitle(world.save);
-    hud.show('title-screen');
-    showStatus('Solmar Bay. Press Enter to start.');
-  }
-
-  function finishRun(kind) {
-    const busted = kind === 'busted';
-    world.save.stats[busted ? 'busted' : 'wasted'] += 1;
-    const cut = takeCashCut();
-    writeSave(world.save);
-    screen = busted ? SCREEN.busted : SCREEN.wasted;
-    hud.setEnd(busted ? 'busted' : 'wasted', cut);
-    hud.show(busted ? 'busted-screen' : 'wasted-screen');
-    showStatus(
-      busted
-        ? 'Busted. The SBPD took you in.'
-        : 'Wasted. You woke up at St. Marina Hospital.',
-    );
-  }
-
-  function handlePresses() {
-    const pressed = input.takeActions();
-    if (pressed & ACTION_MUTE) {
-      const muted = audio.toggleMute();
-      world.feed(muted ? 'Sound off.' : 'Sound on.');
-    }
-    if (pressed & ACTION_RESTART && (screen === SCREEN.play || screen === SCREEN.paused)) {
-      startJob();
+function nearestCarPrompt() {
+  if (G.player.inCar) { G.hud.prompt('E — STEP OUT'); return; }
+  const p = G.player.pos;
+  for (const c of G.cars) {
+    const dx = c.pos.x - p.x, dz = c.pos.z - p.z;
+    if (dx * dx + dz * dz < 16) {
+      G.hud.prompt(c === comet ? 'E — STEAL THE COMET GT' : 'E — STEAL CAR');
       return;
     }
-    if (pressed & ACTION_CONFIRM && screen === SCREEN.title) {
-      startJob();
-      return;
-    }
-    if (
-      pressed & ACTION_CONFIRM
-      && (screen === SCREEN.complete || screen === SCREEN.busted || screen === SCREEN.wasted)
-    ) {
-      startJob();
-      return;
-    }
-    if (pressed & ACTION_MAP && screen === SCREEN.play) {
-      screen = SCREEN.map;
-      hud.showMap(world);
-      hud.show('map-screen');
-      showStatus('City map. Tab to close.');
-      return;
-    }
-    if (pressed & (ACTION_MAP | ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN.map) {
-      screen = SCREEN.play;
-      hud.show(null);
-      showStatus('Playing.');
-      return;
-    }
-    if (pressed & ACTION_PAUSE && screen === SCREEN.play) {
-      screen = SCREEN.paused;
-      hud.show('pause-screen');
-      showStatus('Paused.');
-    } else if (pressed & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN.paused) {
-      screen = SCREEN.play;
-      hud.show(null);
-      showStatus('Playing.');
-    }
   }
+  G.hud.prompt(null);
+}
 
-  function advance() {
-    if (screen === SCREEN.title) {
-      // The title floats above a living city: traffic and pedestrians move.
-      stepWorld(world, STEP, input, null);
-      return;
-    }
-    if (screen !== SCREEN.play) return;
-    const events = stepWorld(world, STEP, input, null);
-    if (world.lastImpact > 8) audio.crash();
-    if (events & EVENT_OBJECTIVE) audio.mission();
-    if (events & EVENT_STEAL) {
-      world.save.stats.carsStolen += 1;
-      audio.crime();
-    }
-    if (events & EVENT_COMPLETE) {
-      writeSave(world.save);
-      screen = SCREEN.complete;
-      hud.setComplete(world.saveMissionResult);
-      hud.show('complete-screen');
-      audio.mission();
-      showStatus(`Job done. Grade ${world.saveMissionResult.grade}.`);
-    } else if (events & EVENT_BUSTED) {
-      finishRun('busted');
-    } else if (events & EVENT_WASTED) {
-      // Dante wakes at the Loft, health restored, heat gone.
-      world.player.health = 100;
-      finishRun('wasted');
-    }
-    // The engine and siren mix follow the car and the nearest cruiser.
-    const kmh = world.player.inCar ? Math.abs(world.player.inCar.speed) * 3.6 : 0;
-    let nearestCop = Infinity;
-    for (const cruiser of world.police.cars) {
-      nearestCop = Math.min(
-        nearestCop,
-        Math.hypot(cruiser.x - world.player.x, cruiser.z - world.player.z),
-      );
-    }
-    audio.update(kmh, nearestCop);
-  }
-
-  function frame(now) {
-    requestAnimationFrame(frame);
-    const dt = Math.min((now - lastTime) / 1000, MAX_DT);
-    lastTime = now;
-    framesSeen += 1;
-    fpsWindow += dt;
-    if (fpsWindow >= 1) {
-      world.fpsSample = Math.round(framesSeen / fpsWindow);
-      framesSeen = 0;
-      fpsWindow = 0;
-    }
-    leftover += dt;
-    handlePresses();
-    if (screen === SCREEN.title || screen === SCREEN.play) {
-      let ran = 0;
-      while (
-        leftover >= STEP
-        && (screen === SCREEN.title || screen === SCREEN.play)
-        && ran < MAX_STEPS_PER_FRAME
-      ) {
-        advance();
-        leftover -= STEP;
-        ran += 1;
-      }
-      if (ran >= MAX_STEPS_PER_FRAME) leftover = 0;
-    } else {
-      leftover = 0;
-    }
-    hud.update(world, dt);
-    render.updateCamera(world, dt);
-    render.updateEffects(world, dt);
-    render.render();
-  }
-
-  // The buttons on the menu screens.
-  document.getElementById('btn-play').addEventListener('click', () => { audio.unlock(); startJob(); });
-  document.getElementById('btn-continue').addEventListener('click', () => { audio.unlock(); startJob(); });
-  document.getElementById('btn-resume').addEventListener('click', () => { screen = SCREEN.play; hud.show(null); });
-  document.getElementById('btn-restart-mission').addEventListener('click', () => startJob());
-  document.getElementById('btn-save-quit').addEventListener('click', () => { writeSave(world.save); goTitle(); });
-  document.getElementById('btn-replay').addEventListener('click', () => startJob());
-  document.getElementById('btn-continue-2').addEventListener('click', () => {
-    screen = SCREEN.play;
-    hud.show(null);
-    world.missions.active = false;
-    world.missions.objective = 'Free roam — press Enter to run the next job.';
-  });
-  document.getElementById('btn-retry').addEventListener('click', () => startJob());
-  document.getElementById('btn-retry-2').addEventListener('click', () => startJob());
-  document.getElementById('btn-to-title').addEventListener('click', () => goTitle());
-  document.getElementById('btn-to-title-2').addEventListener('click', () => goTitle());
-  for (const button of document.querySelectorAll('.diff-btn')) {
-    button.addEventListener('click', () => {
-      world.save.difficulty = button.dataset.diff;
-      world.difficultyName = button.dataset.diff;
-      writeSave(world.save);
-      for (const other of document.querySelectorAll('.diff-btn')) {
-        other.classList.toggle('active', other === button);
-      }
+function update(dt) {
+  G.time += dt;
+  // world dressing keeps moving in every state
+  for (const c of G.world.coins) if (!c.taken) c.mesh.rotation.y += dt * 1.5;
+  G.world.wheel.rotation.z -= dt * 0.12;
+  if (G.state !== 'play') return;
+  G.camOrbit += G.input.orbit();
+  G.camOrbit *= 0.995;
+  const ax = G.input.axis();
+  if (G.player.inCar) {
+    driveCar(G, G.player.car, dt, {
+      throttle: ax.f,
+      steer: ax.s,
+      nitro: G.input.down('ShiftLeft') || G.input.down('ShiftRight'),
+      brake: G.input.down('Space'),
     });
-    button.classList.toggle('active', button.dataset.diff === world.save.difficulty);
+    G.audio.engine(G.player.car.speed, true);
+  } else {
+    G.audio.engine(0, false);
   }
-
-  // Leaving the tab pauses a running game instead of letting the heat
-  // build up unseen.
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden && screen === SCREEN.play) {
-      screen = SCREEN.paused;
-      hud.show('pause-screen');
-      showStatus('Paused.');
-    }
-  });
-
-  hud.setTitle(world.save);
-  hud.show('title-screen');
-  showStatus('Solmar Bay. Press Enter to start.');
-  requestAnimationFrame(frame);
+  G.player.update(dt);
+  G.traffic.update(dt);
+  G.peds.update(dt);
+  G.police.update(dt);
+  G.wanted.update(dt);
+  G.missions.update(dt);
+  G.combat.update(dt);
+  if (G.input.pressed('KeyE')) interact();
+  if (G.input.pressed('KeyF')) G.combat.punch();
+  if (G.input.pressed('KeyM')) { G.state = 'map'; G.hud.showMap(); }
+  if (G.input.pressed('KeyP') || G.input.pressed('Escape')) { G.state = 'pause'; G.hud.showPause(); }
+  nearestCarPrompt();
+  G.hud.update(dt);
 }
 
-if (shotName) playScreenshot(shotName);
-else playLive();
+function keyMenu() {
+  const I = G.input;
+  if (G.state === 'title' && I.consume('Enter')) {
+    G.audio.start();
+    G.audio.click();
+    G.state = 'play';
+    G.hud.hideOverlays();
+    G.hud.flash('MISSION 1 — STEAL THE COMET GT');
+  } else if (G.state === 'map' && (I.consume('KeyM') || I.consume('Escape') || I.consume('KeyP'))) {
+    G.state = 'play';
+    G.hud.hideOverlays();
+  } else if (G.state === 'pause' && (I.consume('KeyP') || I.consume('Escape'))) {
+    G.state = 'play';
+    G.hud.hideOverlays();
+  } else if (G.state === 'busted' && I.consume('Enter')) {
+    respawn(PLACES.policeHq);
+  } else if (G.state === 'wasted' && I.consume('Enter')) {
+    respawn(PLACES.hospital);
+  } else if (G.state === 'play' && G.missions.done && I.consume('Enter')) {
+    G.hud.hideOverlays();
+  }
+}
+
+// fixed-step loop: game time tracks wall time even at 2-3 FPS
+let last = performance.now();
+let acc = 0;
+let frames = 0, fpsT = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  let dt = (now - last) / 1000;
+  last = now;
+  if (dt > CFG.frameCap) dt = CFG.frameCap;
+  frames += 1;
+  fpsT += dt;
+  if (fpsT >= 1) { G.fps = Math.round(frames / fpsT); frames = 0; fpsT = 0; }
+  keyMenu();
+  if (!G.shotMode) {
+    acc += dt;
+    let n = 0;
+    while (acc >= CFG.step && n < CFG.maxSteps) {
+      update(CFG.step);
+      acc -= CFG.step;
+      // edge-triggered keys (E, F) must fire once per press, not once per
+      // fixed sub-step: clear them after the first sub-step of the frame
+      if (n === 0) G.input.endFrame();
+      n += 1;
+    }
+    if (n === CFG.maxSteps) acc = 0;
+  }
+  R.updateCamera(G, dt);
+  R.renderer.render(R.scene, R.camera);
+  G.input.endFrame();
+}
+
+function resize() {
+  R.resize(window.innerWidth, window.innerHeight);
+}
+window.addEventListener('resize', resize);
+resize();
+
+window.addEventListener('error', (e) => {
+  G.errors.push(String(e.message || e.error));
+});
+
+// test + playtest hook: live state, no cheats beyond what the game allows
+window.SB = {
+  game: G,
+  snapshot() {
+    return {
+      state: G.state,
+      stars: G.wanted.stars,
+      searching: G.wanted.searching,
+      cash: G.save.cash,
+      jobs: G.save.jobs,
+      bestGrade: G.save.bestGrade,
+      missionStep: G.missions.step,
+      missionDone: G.missions.done,
+      pos: { x: Math.round(G.player.pos.x), z: Math.round(G.player.pos.z) },
+      heading: Math.round(G.player.heading * 100) / 100,
+      inCar: G.player.inCar,
+      health: Math.round(G.player.health),
+      fps: G.fps,
+      errors: G.errors.slice(),
+    };
+  },
+};
+
+const shot = new URLSearchParams(location.search).get('shot');
+if (shot) {
+  G.hud.hideOverlays();
+  applyShot(G, shot);
+  // shot mode skips updates, so place Dante's mesh where the shot put him
+  G.player.update(0);
+  // the title shot is the city alone: Dante stays out of the frame
+  if (shot === 'title') G.player.mesh.visible = false;
+} else {
+  G.hud.showTitle();
+}
+G.hud.update(0);
+requestAnimationFrame(frame);

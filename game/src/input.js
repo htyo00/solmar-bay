@@ -1,88 +1,45 @@
-// Keyboard and mouse input for Solmar Bay.
-//
-// Two kinds of input live here. Held keys (drive, walk, run, handbrake,
-// steal) report a live steering state every frame. One-shot presses
-// (confirm, pause, mute, restart, map) are queued as bit flags and taken
-// exactly once by the loop, so a press that lands between two frames is
-// neither lost nor counted twice. Steal (E) is a held key, not a one-shot.
-
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
-export const ACTION_STEAL = 4; // E held (read as a held key, not a one-shot)
-export const ACTION_MUTE = 8;
-export const ACTION_RESTART = 16;
-export const ACTION_MAP = 32;
-
-// Keys that steer, drive, run, brake, or steal. Tab is not in this table:
-// it opens the map, but its default action still has to be suppressed.
-const HELD = {
-  forward: ['KeyW', 'ArrowUp'],
-  back: ['KeyS', 'ArrowDown'],
-  left: ['KeyA', 'ArrowLeft'],
-  right: ['KeyD', 'ArrowRight'],
-  run: ['ShiftLeft', 'ShiftRight'],
-  handbrake: ['Space'],
-  steal: ['KeyE'],
-};
-
-// One-shot presses, by code. M stays mute, so the map lives on Tab.
-const PRESS_ONCE = new Map([
-  ['Enter', ACTION_CONFIRM],
-  ['KeyP', ACTION_PAUSE],
-  ['Escape', ACTION_PAUSE],
-  ['KeyM', ACTION_MUTE],
-  ['KeyR', ACTION_RESTART],
-  ['Tab', ACTION_MAP],
-]);
-
+// Keyboard + mouse-drag orbit. Edge-triggered "justPressed" resets each frame.
 export function createInput() {
-  const down = new Set();
-  let pending = 0;
-  let dragSinceRead = 0; // mouse-drag yaw in pixels, since the last read
+  const keys = new Set();
+  const justPressed = new Set();
+  let orbitX = 0;
   let dragging = false;
+  let lastX = 0;
+  const GAME_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'];
 
-  const heldGroups = Object.values(HELD).map((codes) => new Set(codes));
-  const isDriveKey = (code) => heldGroups.some((group) => group.has(code));
-
-  window.addEventListener('keydown', (event) => {
-    if (event.repeat) return;
-    down.add(event.code);
-    const flag = PRESS_ONCE.get(event.code);
-    if (flag !== undefined) pending |= flag;
-    // Arrows, Tab, Space, and the driving keys would otherwise scroll the
-    // page or pull focus away from the canvas.
-    if (isDriveKey(event.code) || event.code === 'Tab') event.preventDefault();
+  window.addEventListener('keydown', (e) => {
+    if (GAME_KEYS.includes(e.code)) e.preventDefault();
+    if (!e.repeat) justPressed.add(e.code);
+    keys.add(e.code);
   });
-  window.addEventListener('keyup', (event) => down.delete(event.code));
-  // A key released while the tab is hidden never sends keyup: let go on blur.
-  window.addEventListener('blur', () => down.clear());
-  window.addEventListener('mousedown', () => { dragging = true; });
+  window.addEventListener('keyup', (e) => keys.delete(e.code));
+  window.addEventListener('blur', () => keys.clear());
+  window.addEventListener('mousedown', (e) => { dragging = true; lastX = e.clientX; });
   window.addEventListener('mouseup', () => { dragging = false; });
-  window.addEventListener('mousemove', (event) => {
-    if (dragging) dragSinceRead += event.movementX || 0;
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    orbitX += (e.clientX - lastX) * 0.004;
+    lastX = e.clientX;
   });
-
-  const held = (codes) => codes.some((code) => down.has(code));
 
   return {
-    forward: () => held(HELD.forward),
-    back: () => held(HELD.back),
-    left: () => held(HELD.left),
-    right: () => held(HELD.right),
-    run: () => held(HELD.run),
-    handbrake: () => held(HELD.handbrake),
-    steal: () => held(HELD.steal),
-    /** Mouse-drag yaw since the last call, in pixels; resets to 0. */
-    takeDrag() {
-      const taken = dragSinceRead;
-      dragSinceRead = 0;
-      return taken;
+    keys, justPressed,
+    down(code) { return keys.has(code); },
+    pressed(code) { return justPressed.has(code); },
+    // read-and-clear: menu handling eats the press so gameplay update
+    // in the same frame does not fire it a second time
+    consume(code) {
+      if (!justPressed.has(code)) return false;
+      justPressed.delete(code);
+      return true;
     },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
-    takeActions() {
-      const taken = pending;
-      pending = 0;
-      return taken;
+    axis() {
+      // forward/back, left/right as -1..1 from WASD + arrows
+      const f = (this.down('KeyW') || this.down('ArrowUp') ? 1 : 0) - (this.down('KeyS') || this.down('ArrowDown') ? 1 : 0);
+      const s = (this.down('KeyD') || this.down('ArrowRight') ? 1 : 0) - (this.down('KeyA') || this.down('ArrowLeft') ? 1 : 0);
+      return { f, s };
     },
+    orbit() { const o = orbitX; orbitX *= 0.9; return o; },
+    endFrame() { justPressed.clear(); },
   };
 }

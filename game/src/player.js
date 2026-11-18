@@ -1,185 +1,106 @@
-// Dante Cross on foot: WASD movement relative to the camera, Shift to run,
-// mouse-drag to orbit the camera, E to steal the nearest car (hold) or to
-// step out of a slow car (tap). Stealing a car the driver is sitting in
-// throws the driver out as a fleeing pedestrian — and earns a wanted star.
+// Dante Cross on foot: tank-style walk/run, building collision, damage model.
 import * as THREE from 'three';
-import { PLAYER } from './config.js';
-import { collideBuildings } from './city.js';
-import { stepCar } from './vehicles.js';
+import { CFG } from './config.js';
+import { clamp } from './random.js';
+import { pushOut } from './city.js';
+import { PLACES } from './city.js';
 
-function part(group, geo, mat, x, y, z) {
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.set(x, y, z);
-  group.add(mesh);
-  return mesh;
-}
+export function createPlayer(G) {
+  const body = new THREE.Group();
+  const torso = new THREE.Mesh(
+    new THREE.BoxGeometry(1.1, 1.5, 0.6),
+    new THREE.MeshLambertMaterial({ color: 0x7a1f2b, emissive: 0x2a0508, emissiveIntensity: 0.7 })
+  );
+  torso.position.y = 1.5;
+  body.add(torso);
+  const head = new THREE.Mesh(
+    new THREE.BoxGeometry(0.7, 0.7, 0.7),
+    new THREE.MeshLambertMaterial({ color: 0xd8a075 })
+  );
+  head.position.y = 2.6;
+  body.add(head);
+  const legs = new THREE.Mesh(
+    new THREE.BoxGeometry(1.0, 1.1, 0.55),
+    new THREE.MeshLambertMaterial({ color: 0x1c2438 })
+  );
+  legs.position.y = 0.55;
+  body.add(legs);
+  // neon jacket stripe so Dante reads at a glance in the dark
+  const stripe = new THREE.Mesh(
+    new THREE.BoxGeometry(1.14, 0.22, 0.64),
+    new THREE.MeshBasicMaterial({ color: 0x35e0ff })
+  );
+  stripe.position.y = 1.9;
+  body.add(stripe);
+  G.scene.add(body);
 
-export function createPlayerMesh() {
-  const group = new THREE.Group();
-  const jacket = new THREE.MeshStandardMaterial({ color: 0x264653, roughness: 0.8 });
-  const shirt = new THREE.MeshStandardMaterial({ color: 0xf5ead6, roughness: 0.8 });
-  const skin = new THREE.MeshStandardMaterial({ color: 0xd4b896, roughness: 0.7 });
-  const jeans = new THREE.MeshStandardMaterial({ color: 0x2a3a4a, roughness: 0.9 });
-  const hairMat = new THREE.MeshStandardMaterial({ color: 0x1a1210, roughness: 0.9 });
-  const shoeMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.6 });
-  const torso = part(group, new THREE.BoxGeometry(0.7, 0.9, 0.4), jacket, 0, 1.15, 0);
-  torso.castShadow = true;
-  part(group, new THREE.BoxGeometry(0.3, 0.7, 0.06), shirt, 0, 1.18, 0.21); // open jacket, white shirt
-  const head = part(group, new THREE.SphereGeometry(0.26, 10, 8), skin, 0, 1.85, 0);
-  head.castShadow = true;
-  part(group, new THREE.BoxGeometry(0.5, 0.18, 0.5), hairMat, 0, 2.06, 0);
-  const armL = part(group, new THREE.BoxGeometry(0.2, 0.75, 0.24), jacket, -0.46, 1.15, 0);
-  const armR = armL.clone();
-  armR.position.x = 0.46;
-  group.add(armR);
-  const legL = part(group, new THREE.BoxGeometry(0.26, 0.8, 0.3), jeans, -0.18, 0.4, 0);
-  const legR = legL.clone();
-  legR.position.x = 0.18;
-  group.add(legR);
-  const shoeL = part(group, new THREE.BoxGeometry(0.28, 0.12, 0.42), shoeMat, -0.18, 0.06, 0.05);
-  const shoeR = shoeL.clone();
-  shoeR.position.x = 0.18;
-  group.add(shoeR);
-  group.userData = { legL, legR, torso, armL, armR };
-  return group;
-}
-
-export function createPlayer(city) {
-  const group = createPlayerMesh();
-  group.position.set(city.start.x, 0, city.start.z);
-  return {
-    x: city.start.x, z: city.start.z,
-    heading: city.start.heading,
-    camYaw: city.start.heading,
+  const P = {
+    pos: { x: PLACES.playerStart.x, z: PLACES.playerStart.z },
+    heading: PLACES.playerStart.heading,
     speed: 0,
-    health: PLAYER.health,
-    armor: 0, // SBPD vest: absorbs damage before health does
-    walkPhase: 0,
-    inCar: null,
-    stealTarget: null,
-    stealProgress: 0,
-    prevSteal: false,
-    group,
+    health: CFG.maxHealth,
+    armor: 40,
+    inCar: false,
+    car: null,
+    mesh: body,
+    hurtFlash: 0,
   };
-}
 
-/** The nearest car Dante can reach from where he stands. */
-export function nearestCar(world, maxDist) {
-  let best = null;
-  let bestDist = maxDist;
-  for (const car of world.cars) {
-    if (car.wrecked) continue;
-    const dist = Math.hypot(car.x - world.player.x, car.z - world.player.z);
-    if (dist < bestDist) {
-      bestDist = dist;
-      best = car;
+  function stepOut() {
+    const c = P.car;
+    if (!c) return;
+    P.inCar = false;
+    P.car = null;
+    const side = { x: Math.cos(c.heading), z: -Math.sin(c.heading) };
+    P.pos.x = c.pos.x + side.x * 3;
+    P.pos.z = c.pos.z + side.z * 3;
+    P.heading = c.heading;
+    pushOut(P.pos, 1, G.world.solids);
+  }
+
+  function takeDamage(amount, cause) {
+    if (P.health <= 0) return;
+    const toArmor = Math.min(P.armor, amount * 0.6);
+    P.armor -= toArmor;
+    P.health -= (amount - toArmor);
+    P.hurtFlash = 0.35;
+    if (P.health <= 0) {
+      P.health = 0;
+      G.onWasted(cause);
     }
   }
-  return best;
-}
 
-function syncPlayerMesh(player, dt) {
-  const group = player.group;
-  group.position.set(player.x, 0, player.z);
-  group.rotation.y = player.heading;
-  const swing = Math.sin(player.walkPhase) * 0.5 * Math.min(1, player.speed / 6);
-  group.userData.legL.rotation.x = swing;
-  group.userData.legR.rotation.x = -swing;
-  group.userData.armL.rotation.x = -swing * 0.8;
-  group.userData.armR.rotation.x = swing * 0.8;
-  group.userData.torso.rotation.x = Math.min(0.15, player.speed * 0.008);
-}
-
-/**
- * On-foot step. Returns event flags (see world.js). When Dante is in a car,
- * world.js drives the car instead and this only syncs the hidden mesh.
- */
-export function stepPlayer(world, dt, input) {
-  const player = world.player;
-  if (player.inCar) return 0;
-  let events = 0;
-  // Camera orbit from mouse drag; movement is relative to the camera.
-  player.camYaw -= input.takeDrag() * 0.005;
-  const strafe = (input.right() ? 1 : 0) - (input.left() ? 1 : 0);
-  const advance = (input.back() ? 1 : 0) - (input.forward() ? 1 : 0);
-  const moving = strafe !== 0 || advance !== 0;
-  const targetSpeed = moving ? (input.run() ? PLAYER.runSpeed : PLAYER.walkSpeed) : 0;
-  player.speed += (targetSpeed - player.speed) * Math.min(1, dt * 10);
-  if (moving) {
-    // Move relative to the camera: W along where it looks, A/D strafing.
-    // Camera forward is (sin(camYaw), cos(camYaw)); right is (-cos, sin).
-    const fwd = -advance; // 1 while W is held
-    const dirX = Math.sin(player.camYaw) * fwd - Math.cos(player.camYaw) * strafe;
-    const dirZ = Math.cos(player.camYaw) * fwd + Math.sin(player.camYaw) * strafe;
-    const len = Math.hypot(dirX, dirZ) || 1;
-    const faceTo = Math.atan2(dirX / len, dirZ / len);
-    let diff = faceTo - player.heading;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    player.heading += diff * Math.min(1, dt * 12);
-    player.walkPhase += dt * player.speed * 1.6;
-    const nx = player.x + Math.sin(player.heading) * player.speed * dt;
-    const nz = player.z + Math.cos(player.heading) * player.speed * dt;
-    const resolved = collideBuildings(world.city, nx, nz, PLAYER.radius);
-    player.x = resolved.x;
-    player.z = resolved.z;
-    player.x = Math.max(-108, Math.min(108, player.x));
-    player.z = Math.max(-108, Math.min(138, player.z));
-  }
-  // Steal / enter: hold E near a car. A traffic car throws its driver out.
-  const target = nearestCar(world, PLAYER.stealRange);
-  player.stealTarget = target;
-  if (target && input.steal()) {
-    player.stealProgress += dt / PLAYER.stealHold;
-    if (player.stealProgress >= 1) {
-      enterCar(world, target);
-      player.stealProgress = 0;
-      events |= 1; // EVENT_STEAL
+  function update(dt) {
+    if (P.inCar) {
+      P.pos.x = P.car.pos.x;
+      P.pos.z = P.car.pos.z;
+      P.heading = P.car.heading;
+      body.visible = false;
+      return;
     }
-  } else {
-    player.stealProgress = 0;
+    body.visible = true;
+    const ax = G.input.axis();
+    const run = G.input.down('ShiftLeft') || G.input.down('ShiftRight');
+    const top = run ? CFG.runSpeed : CFG.walkSpeed;
+    // A/D turn, W/S move along the facing (reverse flips steering, like a car)
+    const dir = ax.f >= 0 ? -1 : 1;
+    P.heading += ax.s * 3.4 * dt * dir;
+    const target = ax.f * top;
+    P.speed += (target - P.speed) * Math.min(1, dt * 10);
+    P.pos.x -= Math.sin(P.heading) * P.speed * dt;
+    P.pos.z -= Math.cos(P.heading) * P.speed * dt;
+    P.pos.x = clamp(P.pos.x, -CFG.bound, CFG.bound);
+    P.pos.z = clamp(P.pos.z, -CFG.bound, CFG.bound);
+    pushOut(P.pos, 0.9, G.world.solids);
+    if (P.hurtFlash > 0) P.hurtFlash -= dt;
+    body.position.set(P.pos.x, 0, P.pos.z);
+    body.rotation.y = P.heading;
+    // walk bob
+    legs.position.y = 0.55 + Math.abs(Math.sin(G.time * 9)) * 0.08 * Math.min(1, Math.abs(P.speed) / 5);
   }
-  syncPlayerMesh(player, dt);
-  return events;
-}
 
-export function enterCar(world, car) {
-  const player = world.player;
-  if (car.isTraffic && car.driver) {
-    // The driver bails and runs — a new pedestrian, scared.
-    world.addFleeingPed(car.x + 1.5, car.z + 1.5);
-    car.driver = null;
-    car.isTraffic = false;
-  }
-  car.isPlayer = true;
-  player.inCar = car;
-  player.group.visible = false;
-  world.crime('steal');
+  P.update = update;
+  P.stepOut = stepOut;
+  P.takeDamage = takeDamage;
+  return P;
 }
-
-export function exitCar(world) {
-  const player = world.player;
-  const car = player.inCar;
-  if (!car) return;
-  car.isPlayer = false;
-  player.inCar = null;
-  const side = { x: Math.cos(car.heading), z: -Math.sin(car.heading) };
-  player.x = car.x + side.x * 2.2;
-  player.z = car.z + side.z * 2.2;
-  player.heading = car.heading;
-  player.camYaw = car.heading;
-  player.group.visible = true;
-  player.group.position.set(player.x, 0, player.z);
-}
-
-/** Driving input mapped from the keyboard, for the car Dante is sitting in. */
-export function drivingInput(input) {
-  return {
-    throttle: (input.forward() ? 1 : 0) - (input.back() ? 1 : 0),
-    steer: (input.left() ? 1 : 0) - (input.right() ? 1 : 0),
-    handbrake: input.handbrake(),
-    nitro: input.run(), // Shift in a car burns the nitro meter
-  };
-}
-
-export { stepCar };
