@@ -6,6 +6,8 @@ import * as THREE from 'three';
 import { CITY, PALETTE } from './config.js';
 import { pick, range } from './random.js';
 
+// Per-district look: wall colour, accent colour, height band, buildings
+// per block. Downtown towers; the Marina stays low and pale.
 const DISTRICTS = {
   downtown: { name: 'Downtown', base: '#d4b896', accent: '#f4a900', minH: 25, maxH: 58, per: 1 },
   marina: { name: 'Marina', base: '#f5ead6', accent: '#2a9d8f', minH: 6, maxH: 12, per: 2 },
@@ -14,6 +16,8 @@ const DISTRICTS = {
   beach: { name: 'Ocean Drive', base: '#e9c46a', accent: '#f4a261', minH: 10, maxH: 16, per: 2 },
 };
 
+// Which district a block belongs to, by grid position. The southern row is
+// checked first so the beachfront wins over everything south of it.
 export function districtAt(bx, bz) {
   if (bz >= 80) return 'beach'; // the southernmost row is the beachfront first
   if (bz >= 40 && bx >= 40) return 'marina';
@@ -23,8 +27,36 @@ export function districtAt(bx, bz) {
   return 'downtown';
 }
 
-/** A facade texture drawn once per district: warm walls, framed windows
- * with lit and reflective glass, and a storefront band at street level. */
+// One lit window cell inside a facade: dark frame, warm glow or reflective
+// glass, a mullion cross, sometimes a curtain.
+function paintWindow(ctx, random, x, y, accent) {
+  ctx.fillStyle = 'rgba(40,30,25,0.85)'; // frame
+  ctx.fillRect(x - 1, y - 1, 14, 14);
+  const lit = random() < 0.65; // night: most windows glow warm
+  if (lit) {
+    const g = ctx.createLinearGradient(x, y, x, y + 12);
+    g.addColorStop(0, '#ffd98a');
+    g.addColorStop(1, accent);
+    ctx.fillStyle = g;
+  } else {
+    ctx.fillStyle = random() < 0.5 ? '#2e4256' : '#23282e'; // reflective glass
+    ctx.fillRect(x, y, 12, 12);
+    ctx.fillStyle = 'rgba(255,240,200,0.25)'; // sky glint
+    ctx.fillRect(x, y, 12, 3);
+    return;
+  }
+  ctx.fillRect(x, y, 12, 12);
+  ctx.fillStyle = 'rgba(40,30,25,0.6)'; // mullion cross
+  ctx.fillRect(x + 5, y, 2, 12);
+  ctx.fillRect(x, y + 5, 12, 2);
+  if (random() < 0.3) { // curtain
+    ctx.fillStyle = 'rgba(245,234,214,0.55)';
+    ctx.fillRect(x + 1, y + 1, 5, 10);
+  }
+}
+
+// A facade texture drawn once per district: warm walls, framed windows
+// with lit and reflective glass, and a storefront band at street level.
 function facadeTexture(random, base, accent) {
   const canvas = document.createElement('canvas');
   canvas.width = 128;
@@ -39,30 +71,7 @@ function facadeTexture(random, base, accent) {
   }
   for (let row = 0; row < 11; row += 1) {
     for (let col = 0; col < 6; col += 1) {
-      const x = 8 + col * 20, y = 10 + row * 20;
-      ctx.fillStyle = 'rgba(40,30,25,0.85)'; // frame
-      ctx.fillRect(x - 1, y - 1, 14, 14);
-      const lit = random() < 0.65; // night: most windows glow warm
-      if (lit) {
-        const g = ctx.createLinearGradient(x, y, x, y + 12);
-        g.addColorStop(0, '#ffd98a');
-        g.addColorStop(1, accent);
-        ctx.fillStyle = g;
-      } else {
-        ctx.fillStyle = random() < 0.5 ? '#2e4256' : '#23282e'; // reflective glass
-        ctx.fillRect(x, y, 12, 12);
-        ctx.fillStyle = 'rgba(255,240,200,0.25)'; // sky glint
-        ctx.fillRect(x, y, 12, 3);
-        continue;
-      }
-      ctx.fillRect(x, y, 12, 12);
-      ctx.fillStyle = 'rgba(40,30,25,0.6)'; // mullion cross
-      ctx.fillRect(x + 5, y, 2, 12);
-      ctx.fillRect(x, y + 5, 12, 2);
-      if (random() < 0.3) { // curtain
-        ctx.fillStyle = 'rgba(245,234,214,0.55)';
-        ctx.fillRect(x + 1, y + 1, 5, 10);
-      }
+      paintWindow(ctx, random, 8 + col * 20, 10 + row * 20, accent);
     }
   }
   // Street level: storefront glass under an awning stripe.
@@ -78,7 +87,7 @@ function facadeTexture(random, base, accent) {
   return texture;
 }
 
-/** One road tile (13 units): asphalt with wear, a dashed centre line. */
+// One road tile (13 units): asphalt with wear, a dashed centre line.
 function roadTexture() {
   const canvas = document.createElement('canvas');
   canvas.width = 128;
@@ -107,7 +116,7 @@ function roadTexture() {
   return texture;
 }
 
-/** Zebra crossing for one intersection approach. */
+// Zebra crossing for one intersection approach.
 function crosswalkTexture() {
   const canvas = document.createElement('canvas');
   canvas.width = 128;
@@ -121,7 +130,7 @@ function crosswalkTexture() {
   return texture;
 }
 
-/** Sidewalk plate: expansion joints and speckle, so concrete is not flat. */
+// Sidewalk plate: expansion joints and speckle, so concrete is not flat.
 function sidewalkTexture() {
   const canvas = document.createElement('canvas');
   canvas.width = 128;
@@ -144,7 +153,7 @@ function sidewalkTexture() {
   return texture;
 }
 
-/** Rooftop slab: a dark deck with a pale border and vent boxes drawn in. */
+// Rooftop slab: a dark deck with a pale border and vent boxes drawn in.
 function roofTexture(random) {
   const canvas = document.createElement('canvas');
   canvas.width = 128;
@@ -162,7 +171,7 @@ function roofTexture(random) {
   return texture;
 }
 
-/** Glowing neon sign: bright text with a halo, drawn once, unlit in the dark. */
+// Glowing neon sign: bright text with a halo, drawn once, unlit in the dark.
 function neonTexture(line1, line2, color) {
   const canvas = document.createElement('canvas');
   canvas.width = 512;
@@ -185,6 +194,7 @@ function neonTexture(line1, line2, color) {
   return texture;
 }
 
+// A billboard face: coloured background, centred bold lines.
 function billboardTexture(lines, bg, fg) {
   const canvas = document.createElement('canvas');
   canvas.width = 256;
@@ -201,6 +211,33 @@ function billboardTexture(lines, bg, fg) {
   return texture;
 }
 
+// The buildings of one block, placed on the block grid.
+function placeBlockBuildings(random, buildings, bx, bz) {
+  const key = districtAt(bx, bz);
+  const district = DISTRICTS[key];
+  const count = district.per;
+  for (let i = 0; i < count; i += 1) {
+    const w = range(random, 12, 20);
+    const d = range(random, 12, 20);
+    const h = range(random, district.minH, district.maxH);
+    const ox = count === 1 ? 0 : (i === 0 ? -6 : 6);
+    const oz = count === 1 ? 0 : (i === 0 ? -6 : 6);
+    buildings.push({ x: bx + ox, z: bz + oz, w, d, h, district: key, name: district.name });
+  }
+}
+
+// The props of one block: palms on the beach boulevard, lamps elsewhere,
+// and the occasional hydrant.
+function placeBlockProps(random, props, bx, bz) {
+  if (bz === 80) {
+    props.push({ kind: 'palm', x: bx - 10, z: 96 });
+    props.push({ kind: 'palm', x: bx + 10, z: 96 });
+  } else if (random() < 0.5) {
+    props.push({ kind: 'lamp', x: bx + 13, z: bz + 13 });
+  }
+  if (random() < 0.35) props.push({ kind: 'hydrant', x: bx - 13, z: bz + 10 });
+}
+
 export function createCity(random) {
   const buildings = [];
   const props = []; // { kind: 'palm'|'lamp'|'hydrant'|'container'|'billboard', x, z, ... }
@@ -210,27 +247,8 @@ export function createCity(random) {
 
   for (const bx of CITY.blocks) {
     for (const bz of CITY.blocks) {
-      const key = districtAt(bx, bz);
-      const district = DISTRICTS[key];
-      const count = district.per;
-      for (let i = 0; i < count; i += 1) {
-        const w = range(random, 12, 20);
-        const d = range(random, 12, 20);
-        const h = range(random, district.minH, district.maxH);
-        const ox = count === 1 ? 0 : (i === 0 ? -6 : 6);
-        const oz = count === 1 ? 0 : (i === 0 ? -6 : 6);
-        const x = bx + ox;
-        const z = bz + oz;
-        buildings.push({ x, z, w, d, h, district: key, name: district.name });
-      }
-      // Street props: palms on the beach boulevard, lamps everywhere else.
-      if (bz === 80) {
-        props.push({ kind: 'palm', x: bx - 10, z: 96 });
-        props.push({ kind: 'palm', x: bx + 10, z: 96 });
-      } else if (random() < 0.5) {
-        props.push({ kind: 'lamp', x: bx + 13, z: bz + 13 });
-      }
-      if (random() < 0.35) props.push({ kind: 'hydrant', x: bx - 13, z: bz + 10 });
+      placeBlockBuildings(random, buildings, bx, bz);
+      placeBlockProps(random, props, bx, bz);
     }
   }
   // Port containers, marina pier, downtown billboards (original fake ads only).
@@ -263,7 +281,7 @@ export function createCity(random) {
   };
 }
 
-/** Circle vs building AABBs: push (x, z) out and report the hit normal. */
+// Circle vs building AABBs: push (x, z) out and report the hit normal.
 export function collideBuildings(city, x, z, radius) {
   let hit = null;
   for (const b of city.buildings) {
@@ -286,7 +304,7 @@ export function collideBuildings(city, x, z, radius) {
   return { x, z, hit };
 }
 
-/** The nearest road coordinate on one axis (roads run both ways). */
+// The nearest road coordinate on one axis (roads run both ways).
 export function nearestRoad(value) {
   let best = CITY.roads[0];
   for (const road of CITY.roads) if (Math.abs(road - value) < Math.abs(best - value)) best = road;
@@ -298,7 +316,7 @@ export function onRoad(city, x, z) {
   return CITY.roads.some((r) => Math.abs(x - r) < half) || CITY.roads.some((r) => Math.abs(z - r) < half);
 }
 
-/** Greedy next intersection toward a target: the road graph, no pathfinding lib. */
+// Greedy next intersection toward a target: the road graph, no pathfinding lib.
 export function nextNodeToward(city, fromX, fromZ, toX, toZ, random) {
   const from = { x: nearestRoad(fromX), z: nearestRoad(fromZ) };
   const options = [];
@@ -315,19 +333,8 @@ export function nextNodeToward(city, fromX, fromZ, toX, toZ, random) {
   return random() < 0.75 ? options[0] : pick(random, options);
 }
 
-export function createCityMeshes(city, random) {
-  const group = new THREE.Group();
-  const boxGeo = new THREE.BoxGeometry(1, 1, 1);
-  const facadeMats = {};
-  for (const [key, district] of Object.entries(DISTRICTS)) {
-    facadeMats[key] = new THREE.MeshStandardMaterial({
-      map: facadeTexture(random, district.base, district.accent), roughness: 0.85, metalness: 0.05,
-    });
-  }
-  const roofMat = new THREE.MeshStandardMaterial({ map: roofTexture(random), roughness: 0.95 });
-  const mastMat = new THREE.MeshStandardMaterial({ color: 0x4a403a, roughness: 0.6, metalness: 0.4 });
-
-  // Ground, sand, sea.
+// Ground, sand and sea planes under the whole city.
+function buildTerrain(group, boxGeo) {
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(CITY.half * 2, CITY.half * 2),
     new THREE.MeshStandardMaterial({ color: 0x5a5044, roughness: 1 }));
   ground.rotation.x = -Math.PI / 2;
@@ -344,8 +351,11 @@ export function createCityMeshes(city, random) {
   sea.rotation.x = -Math.PI / 2;
   sea.position.set(0, -0.4, CITY.seaZ + 100);
   group.add(sea);
+}
 
-  // Roads: asphalt planes with a dashed centre line, one per road line.
+// Roads: asphalt planes with a dashed centre line, one per road line,
+// plus a zebra crossing at every intersection.
+function buildRoads(group) {
   const roadTex = roadTexture();
   const roadMat = new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.4, metalness: 0.15 }); // wet asphalt: reflects neon + moon
   for (const r of CITY.roads) {
@@ -361,7 +371,6 @@ export function createCityMeshes(city, random) {
     across.receiveShadow = true;
     group.add(across);
   }
-  // Zebra crossings, one per intersection (alternating direction).
   const crossTex = crosswalkTexture();
   const crossMat = new THREE.MeshStandardMaterial({ map: crossTex, transparent: true, roughness: 0.9 });
   for (const x of CITY.roads) {
@@ -374,8 +383,12 @@ export function createCityMeshes(city, random) {
       group.add(cross);
     }
   }
+}
 
-  // Sidewalk plates + buildings.
+// Sidewalk plates, then every building with its roof — and rooftop clutter
+// on the tall towers (AC boxes and an antenna), so the skyline reads as a
+// real city from above (title orbit, cover shot).
+function buildBlocks(group, city, boxGeo, facadeMats, roofMat, mastMat) {
   const walkMat = new THREE.MeshStandardMaterial({ map: sidewalkTexture(), roughness: 1 });
   for (const bx of CITY.blocks) {
     for (const bz of CITY.blocks) {
@@ -397,8 +410,6 @@ export function createCityMeshes(city, random) {
     roof.scale.set(b.w + 0.4, 0.3, b.d + 0.4);
     roof.position.set(b.x, b.h + 0.15, b.z);
     group.add(roof);
-    // Rooftop clutter on the tall towers: AC boxes and an antenna, so the
-    // skyline reads as a real city from above (title orbit, cover shot).
     if (b.h > 25) {
       const acMat = new THREE.MeshStandardMaterial({ color: 0x8a8378, roughness: 0.9 });
       for (const [ox, oz] of [[-3, -2], [3, 2]]) {
@@ -412,8 +423,10 @@ export function createCityMeshes(city, random) {
       group.add(mast);
     }
   }
+}
 
-  // Marina pier: wooden planks out over the sea.
+// Marina pier: wooden planks out over the sea.
+function buildPier(group, city, boxGeo) {
   const plankMat = new THREE.MeshStandardMaterial({ color: 0x8a6d3b, roughness: 1 });
   for (let i = 0; i < 10; i += 1) {
     const plank = new THREE.Mesh(boxGeo, plankMat);
@@ -422,8 +435,10 @@ export function createCityMeshes(city, random) {
     plank.castShadow = true;
     group.add(plank);
   }
+}
 
-  // Props: palms, lamps, hydrants, containers, billboards.
+// Props: palms, lamps, hydrants, containers, billboards.
+function buildProps(group, city, boxGeo) {
   const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 1 });
   const leafMat = new THREE.MeshStandardMaterial({ color: 0x3a7d44, roughness: 0.9 });
   const lampMat = new THREE.MeshStandardMaterial({ color: 0x4a403a, roughness: 0.6, metalness: 0.4 });
@@ -468,10 +483,13 @@ export function createCityMeshes(city, random) {
       group.add(post);
     }
   }
+  return { trunkMat, lampMat };
+}
 
-  // Landmarks, one per district: the neon arch over Ocean Drive (the cover
-  // focal point), a cyan BAY FM sign on a Downtown face, Port cranes, a
-  // Hills observatory dome, and the mountain ridge framing the horizon.
+// Landmarks, one per district: the neon arch over Ocean Drive (the cover
+// focal point), a cyan BAY FM sign on a Downtown face, Port cranes, a
+// Hills observatory dome, and the mountain ridge framing the horizon.
+function buildLandmarks(group, city, boxGeo, lampMat) {
   const neonMat = new THREE.MeshBasicMaterial({ map: neonTexture('SOLMAR BAY', 'OCEAN DRIVE', '#ff4fd8'), transparent: true, side: THREE.DoubleSide });
   for (const side of [-6, 6]) {
     const post = new THREE.Mesh(boxGeo, lampMat);
@@ -521,7 +539,10 @@ export function createCityMeshes(city, random) {
     peak.rotation.y = Math.PI / 4;
     group.add(peak);
   }
-  // Beach umbrellas on the sand: colour pops against the night.
+}
+
+// Beach umbrellas on the sand: colour pops against the night.
+function buildUmbrellas(group, trunkMat) {
   const umbrellaColors = [0xff4fd8, 0x4fd8ff, 0xf4a900, 0xe76f51, 0x2a9d8f, 0xc1666b];
   for (let i = 0; i < 6; i += 1) {
     const ux = -80 + i * 32;
@@ -534,7 +555,10 @@ export function createCityMeshes(city, random) {
     canopy.position.set(ux, 2.8, uz);
     group.add(canopy);
   }
-  // Pickups: Bay Coins (gold, upright) and armour crates (blue SBPD vests).
+}
+
+// Pickups: Bay Coins (gold, upright) and armour crates (blue SBPD vests).
+function buildPickups(group, city, boxGeo) {
   const coinMat = new THREE.MeshStandardMaterial({ color: 0xf4a900, emissive: 0xa87800, emissiveIntensity: 0.8, metalness: 0.8, roughness: 0.3 });
   for (const coin of city.coins) {
     const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.12, 16), coinMat);
@@ -551,5 +575,27 @@ export function createCityMeshes(city, random) {
     group.add(mesh);
     crate.mesh = mesh;
   }
+}
+
+export function createCityMeshes(city, random) {
+  const group = new THREE.Group();
+  const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+  const facadeMats = {};
+  for (const [key, district] of Object.entries(DISTRICTS)) {
+    facadeMats[key] = new THREE.MeshStandardMaterial({
+      map: facadeTexture(random, district.base, district.accent), roughness: 0.85, metalness: 0.05,
+    });
+  }
+  const roofMat = new THREE.MeshStandardMaterial({ map: roofTexture(random), roughness: 0.95 });
+  const mastMat = new THREE.MeshStandardMaterial({ color: 0x4a403a, roughness: 0.6, metalness: 0.4 });
+
+  buildTerrain(group, boxGeo);
+  buildRoads(group);
+  buildBlocks(group, city, boxGeo, facadeMats, roofMat, mastMat);
+  buildPier(group, city, boxGeo);
+  const { trunkMat, lampMat } = buildProps(group, city, boxGeo);
+  buildLandmarks(group, city, boxGeo, lampMat);
+  buildUmbrellas(group, trunkMat);
+  buildPickups(group, city, boxGeo);
   return group;
 }

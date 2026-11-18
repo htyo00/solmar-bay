@@ -22,6 +22,7 @@ const DIALOGUE = [
   'Clean work, Dante.',
 ];
 
+// Mara Voss, the fixer, as a small flat portrait: dark bob, gold hoop.
 function drawPortrait(canvas) {
   const c = canvas.getContext('2d');
   c.fillStyle = '#1d3557';
@@ -85,6 +86,7 @@ export function createHud() {
   let bannerTimer = 0;
   let lastObjective = '';
 
+  // Five stars; lit ones glow, and while the heat is fading they blink dim.
   function starString(stars, blinking, time) {
     let out = '';
     for (let i = 0; i < 5; i += 1) {
@@ -95,16 +97,8 @@ export function createHud() {
     return out;
   }
 
-  function drawMap(ctx, world, size, S, ox, oy, labels) {
-    const mx = (x) => (x + 100) * S + ox;
-    const mz = (z) => (z + 100) * S + oy;
-    ctx.clearRect(0, 0, size, size);
-    ctx.save();
-    if (size <= 220) {
-      ctx.beginPath();
-      ctx.arc(size / 2, size / 2, 96, 0, Math.PI * 2);
-      ctx.clip();
-    }
+  // Static ground of a map: dark base, sea, blocks, roads, district names.
+  function paintGround(ctx, size, S, ox, oy, labels, mx, mz) {
     ctx.fillStyle = '#141a30';
     ctx.fillRect(0, 0, size, size);
     ctx.fillStyle = '#14324a'; // sea
@@ -135,6 +129,11 @@ export function createHud() {
         ctx.fillText(name, mx(x), mz(z));
       }
     }
+  }
+
+  // Live layer of a map: waypoint diamond, coins, traffic, police cones and
+  // dots, the escape search circle, and Dante's arrow (grey while hidden).
+  function paintLive(ctx, world, S, mx, mz) {
     const wp = world.missions.waypoint;
     if (wp) {
       const pulse = (6 + Math.sin(world.elapsed * 4) * 2) * S;
@@ -200,6 +199,21 @@ export function createHud() {
     ctx.closePath();
     ctx.fill();
     ctx.restore();
+  }
+
+  // One map painter for both the round minimap and the big Tab map.
+  function drawMap(ctx, world, size, S, ox, oy, labels) {
+    const mx = (x) => (x + 100) * S + ox;
+    const mz = (z) => (z + 100) * S + oy;
+    ctx.clearRect(0, 0, size, size);
+    ctx.save();
+    if (size <= 220) {
+      ctx.beginPath();
+      ctx.arc(size / 2, size / 2, 96, 0, Math.PI * 2);
+      ctx.clip();
+    }
+    paintGround(ctx, size, S, ox, oy, labels, mx, mz);
+    paintLive(ctx, world, S, mx, mz);
     ctx.restore();
     if (size <= 220) {
       ctx.strokeStyle = '#f4a900';
@@ -214,88 +228,124 @@ export function createHud() {
     drawMap(mapCtx, world, 200, 0.72, 18, 8, false);
   }
 
+  // Objective line + banner, shown once per objective change.
+  function refreshObjective(world, dt) {
+    if (world.missions.objective !== lastObjective) {
+      objectiveEl.textContent = world.missions.objective;
+      lastObjective = world.missions.objective;
+      // Staged shots frame the action, not the notification.
+      if (!world.shotCam && !world.noBanner) {
+        bannerEl.textContent = world.missions.objective;
+        bannerEl.classList.add('show');
+        bannerTimer = 3.5;
+      }
+    }
+    if (bannerTimer > 0) {
+      bannerTimer -= dt;
+      if (bannerTimer <= 0) bannerEl.classList.remove('show');
+    }
+  }
+
+  // Feed: newest lines on top, at most three kept.
+  function refreshFeed(world) {
+    while (feedShown < world.feedLog.length) {
+      const line = world.feedLog[feedShown];
+      feedShown += 1;
+      const div = document.createElement('div');
+      div.textContent = line;
+      feedEl.prepend(div);
+      while (feedEl.children.length > 3) feedEl.removeChild(feedEl.lastChild);
+    }
+  }
+
+  // Mission card: numbered job, step bar, what comes next.
+  function refreshMissionCard(world) {
+    const m = world.missions;
+    const mission = MISSIONS[m.index];
+    missionTitleEl.textContent = `MISSION ${m.index + 1}/6 — ${mission.name}`;
+    missionStageEl.innerHTML = [0, 1, 2, 3].map((i) =>
+      `<span class="seg${i < m.step + 1 ? ' on' : ''}"></span>`).join('') + `<span class="step-label">STEP ${Math.min(m.step + 1, 4)}/4</span>`;
+    missionNextEl.textContent = m.index + 1 < MISSIONS.length
+      ? `NEXT: MISSION ${m.index + 2} — ${MISSIONS[m.index + 1].name}` : 'NEXT: THE LAST JOB';
+  }
+
+  // Police response panel: real units, real distances, real status.
+  function refreshPolicePanel(world) {
+    const player = world.player;
+    if (world.wanted.stars > 0) {
+      const px = player.inCar ? player.inCar.x : player.x;
+      const pz = player.inCar ? player.inCar.z : player.z;
+      const rows = world.police.cars.slice(0, 4).map((car, i) => {
+        const d = Math.round(Math.hypot(car.x - px, car.z - pz));
+        const status = d <= 30 ? 'RAMMING' : 'CHASING';
+        return `<div>UNIT ${i + 1} — ${d}m — ${status}</div>`;
+      });
+      if (world.police.heli.visible) rows.push('<div>AIR 1 — SPOTLIGHT</div>');
+      unitsEl.innerHTML = `<div class="units-head">SBPD RESPONSE — ${world.wanted.stars}★</div>${rows.join('')}`;
+      unitsEl.classList.add('show');
+    } else {
+      unitsEl.classList.remove('show');
+    }
+  }
+
+  // Dialogue card: Mara Voss, the fixer, by mission step.
+  function refreshDialogue(world) {
+    const m = world.missions;
+    if (m.active) {
+      dialogueLineEl.textContent = DIALOGUE[Math.min(m.step, 4)];
+      dialogueEl.classList.add('show');
+    } else {
+      dialogueEl.classList.remove('show');
+    }
+  }
+
+  // Speed, health, district and the three bars under the minimap.
+  function refreshMeters(world) {
+    const player = world.player;
+    const px = player.inCar ? player.inCar.x : player.x;
+    const pz = player.inCar ? player.inCar.z : player.z;
+    districtEl.textContent = `${world.districtName(px, pz).toUpperCase()} — SOLMAR BAY`;
+    const speed = player.inCar ? Math.abs(player.inCar.speed) * 3.6 : Math.abs(player.speed) * 3.6;
+    speedEl.textContent = `${Math.round(speed)}`;
+    const health = player.inCar ? player.inCar.health : player.health;
+    healthEl.style.width = `${Math.max(0, health)}%`;
+    healthEl.style.background = health > 50 ? '#2a9d8f' : health > 25 ? '#f4a900' : '#e76f51';
+    // Three status bars under the minimap: health / armour / special (nitro).
+    barHealthEl.style.width = `${Math.max(0, player.health)}%`;
+    barArmorEl.style.width = `${Math.max(0, player.armor)}%`;
+    barSpecialEl.style.width = `${player.inCar ? Math.max(0, player.inCar.nitro) : 0}%`;
+  }
+
+  // Context prompt: steal / drive / step out, with a hold progress bar.
+  function refreshPrompt(world) {
+    const player = world.player;
+    if (!player.inCar && player.stealTarget) {
+      const car = player.stealTarget;
+      const label = car.isTraffic ? `HOLD E TO STEAL — ${car.model.name}` : `HOLD E TO DRIVE — ${car.model.name}`;
+      promptEl.querySelector('.prompt-text').textContent = label;
+      promptFill.style.width = `${Math.round(player.stealProgress * 100)}%`;
+      promptEl.classList.add('show');
+    } else if (player.inCar && Math.abs(player.inCar.speed) < 2) {
+      promptEl.querySelector('.prompt-text').textContent = 'Press E to step out';
+      promptFill.style.width = '0%';
+      promptEl.classList.add('show');
+    } else {
+      promptEl.classList.remove('show');
+    }
+  }
+
   return {
     update(world, dt) {
       const player = world.player;
       starsEl.innerHTML = starString(world.wanted.stars, world.wanted.blinking, world.elapsed);
       cashEl.textContent = `$${world.save.cash.toLocaleString('en-US')}`;
-      if (world.missions.objective !== lastObjective) {
-        objectiveEl.textContent = world.missions.objective;
-        lastObjective = world.missions.objective;
-        // Staged shots frame the action, not the notification.
-        if (!world.shotCam && !world.noBanner) {
-          bannerEl.textContent = world.missions.objective;
-          bannerEl.classList.add('show');
-          bannerTimer = 3.5;
-        }
-      }
-      if (bannerTimer > 0) {
-        bannerTimer -= dt;
-        if (bannerTimer <= 0) bannerEl.classList.remove('show');
-      }
-      while (feedShown < world.feedLog.length) {
-        const line = world.feedLog[feedShown];
-        feedShown += 1;
-        const div = document.createElement('div');
-        div.textContent = line;
-        feedEl.prepend(div);
-        while (feedEl.children.length > 3) feedEl.removeChild(feedEl.lastChild);
-      }
-      // Mission card: numbered job, step bar, what comes next.
-      const m = world.missions;
-      const mission = MISSIONS[m.index];
-      missionTitleEl.textContent = `MISSION ${m.index + 1}/6 — ${mission.name}`;
-      missionStageEl.innerHTML = [0, 1, 2, 3].map((i) =>
-        `<span class="seg${i < m.step + 1 ? ' on' : ''}"></span>`).join('') + `<span class="step-label">STEP ${Math.min(m.step + 1, 4)}/4</span>`;
-      missionNextEl.textContent = m.index + 1 < MISSIONS.length
-        ? `NEXT: MISSION ${m.index + 2} — ${MISSIONS[m.index + 1].name}` : 'NEXT: THE LAST JOB';
-      // Police response panel: real units, real distances, real status.
-      if (world.wanted.stars > 0) {
-        const px = player.inCar ? player.inCar.x : player.x;
-        const pz = player.inCar ? player.inCar.z : player.z;
-        const rows = world.police.cars.slice(0, 4).map((car, i) => {
-          const d = Math.round(Math.hypot(car.x - px, car.z - pz));
-          const status = d <= 30 ? 'RAMMING' : 'CHASING';
-          return `<div>UNIT ${i + 1} — ${d}m — ${status}</div>`;
-        });
-        if (world.police.heli.visible) rows.push('<div>AIR 1 — SPOTLIGHT</div>');
-        unitsEl.innerHTML = `<div class="units-head">SBPD RESPONSE — ${world.wanted.stars}★</div>${rows.join('')}`;
-        unitsEl.classList.add('show');
-      } else {
-        unitsEl.classList.remove('show');
-      }
-      // Dialogue card: Mara Voss, the fixer, by mission step.
-      if (m.active) {
-        dialogueLineEl.textContent = DIALOGUE[Math.min(m.step, 4)];
-        dialogueEl.classList.add('show');
-      } else {
-        dialogueEl.classList.remove('show');
-      }
-      const px = player.inCar ? player.inCar.x : player.x;
-      const pz = player.inCar ? player.inCar.z : player.z;
-      districtEl.textContent = `${world.districtName(px, pz).toUpperCase()} — SOLMAR BAY`;
-      const speed = player.inCar ? Math.abs(player.inCar.speed) * 3.6 : Math.abs(player.speed) * 3.6;
-      speedEl.textContent = `${Math.round(speed)}`;
-      const health = player.inCar ? player.inCar.health : player.health;
-      healthEl.style.width = `${Math.max(0, health)}%`;
-      healthEl.style.background = health > 50 ? '#2a9d8f' : health > 25 ? '#f4a900' : '#e76f51';
-      // Three status bars under the minimap: health / armour / special (nitro).
-      barHealthEl.style.width = `${Math.max(0, player.health)}%`;
-      barArmorEl.style.width = `${Math.max(0, player.armor)}%`;
-      barSpecialEl.style.width = `${player.inCar ? Math.max(0, player.inCar.nitro) : 0}%`;
-      if (!player.inCar && player.stealTarget) {
-        const car = player.stealTarget;
-        const label = car.isTraffic ? `HOLD E TO STEAL — ${car.model.name}` : `HOLD E TO DRIVE — ${car.model.name}`;
-        promptEl.querySelector('.prompt-text').textContent = label;
-        promptFill.style.width = `${Math.round(player.stealProgress * 100)}%`;
-        promptEl.classList.add('show');
-      } else if (player.inCar && Math.abs(player.inCar.speed) < 2) {
-        promptEl.querySelector('.prompt-text').textContent = 'Press E to step out';
-        promptFill.style.width = '0%';
-        promptEl.classList.add('show');
-      } else {
-        promptEl.classList.remove('show');
-      }
+      refreshObjective(world, dt);
+      refreshFeed(world);
+      refreshMissionCard(world);
+      refreshPolicePanel(world);
+      refreshDialogue(world);
+      refreshMeters(world);
+      refreshPrompt(world);
       drawMinimap(world);
       if (world.fpsSample !== null) fpsEl.textContent = `${world.fpsSample} FPS`;
     },

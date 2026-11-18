@@ -1,13 +1,14 @@
-// Save and load through localStorage: cash, mission progress, owned cars,
-// best stats and the chosen difficulty. Everything is guarded — a private
-// window or a corrupt save just means a fresh start.
+// Persistence through localStorage: pocket cash, how far along the mission
+// chain Dante is, cars in the garage, best run and difficulty. Every access
+// is wrapped, because a private window or a mangled save must never crash
+// the game — worst case, Dante just starts fresh.
 
 import { SAVE_KEY } from './config.js';
 
 export function defaultSave() {
   return {
     cash: 250,
-    missionUnlocked: 1, // mission 1 is open; completing one unlocks the next
+    missionUnlocked: 1, // job one is open from the start; each finish opens the next
     carsOwned: [],
     bestGrade: null,
     bestTime: null,
@@ -20,13 +21,13 @@ export function loadSave() {
   try {
     const raw = window.localStorage.getItem(SAVE_KEY);
     if (!raw) return defaultSave();
-    const parsed = JSON.parse(raw);
-    const fresh = defaultSave();
+    const stored = JSON.parse(raw);
+    const blank = defaultSave();
     return {
-      ...fresh,
-      ...parsed,
-      stats: { ...fresh.stats, ...(parsed.stats || {}) },
-      carsOwned: Array.isArray(parsed.carsOwned) ? parsed.carsOwned : [],
+      ...blank,
+      ...stored,
+      stats: { ...blank.stats, ...(stored.stats || {}) },
+      carsOwned: Array.isArray(stored.carsOwned) ? stored.carsOwned : [],
     };
   } catch {
     return defaultSave();
@@ -37,6 +38,7 @@ export function writeSave(save) {
   try {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify(save));
   } catch {
-    // Storage can be off (private windows): progress then lasts this visit only.
+    // Storage may be unavailable (private browsing): the run then only
+    // survives until the tab closes, and the game carries on regardless.
   }
 }

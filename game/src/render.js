@@ -4,6 +4,39 @@
 // and by car — plus the smoke puffs that mark a hurt car or a handbrake slide.
 import * as THREE from 'three';
 
+// Vertical gradient for the sky dome: deep indigo overhead fading to a
+// magenta neon glow at the horizon, so the night reads as city air.
+function makeSkyTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 4; canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0, '#0b1030');
+  grad.addColorStop(0.55, '#1c2450');
+  grad.addColorStop(0.8, '#432a68');
+  grad.addColorStop(0.9, '#a04a7a');
+  grad.addColorStop(1, '#d65a8a'); // neon-dusk horizon: pink, not plain orange
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 4, 256);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// Pale radial glow used for the moon disc and its halo.
+function makeGlowTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createRadialGradient(64, 64, 4, 64, 64, 64);
+  grad.addColorStop(0, 'rgba(240,246,255,1)');
+  grad.addColorStop(0.4, 'rgba(200,215,255,0.7)');
+  grad.addColorStop(1, 'rgba(160,180,255,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(canvas);
+}
+
 export function createRender(canvas) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -20,38 +53,25 @@ export function createRender(canvas) {
   camera.position.set(0, 40, 120);
 
   // Cold moonlight from the north-west, long shadows across the streets.
-  const sun = new THREE.DirectionalLight(0x9db8ff, 1.35);
-  sun.position.set(-140, 120, -80);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.left = -140;
-  sun.shadow.camera.right = 140;
-  sun.shadow.camera.top = 140;
-  sun.shadow.camera.bottom = -140;
-  sun.shadow.camera.near = 10;
-  sun.shadow.camera.far = 500;
-  sun.shadow.normalBias = 0.03;
-  sun.shadow.radius = 4; // PCFSoft blurs the shadow edge
-  sun.shadow.intensity = 0.7; // shadows shade, they never go pitch black
-  scene.add(sun, sun.target);
+  const moon = new THREE.DirectionalLight(0x9db8ff, 1.35);
+  moon.position.set(-140, 120, -80);
+  moon.castShadow = true;
+  moon.shadow.mapSize.set(2048, 2048);
+  moon.shadow.camera.left = -140;
+  moon.shadow.camera.right = 140;
+  moon.shadow.camera.top = 140;
+  moon.shadow.camera.bottom = -140;
+  moon.shadow.camera.near = 10;
+  moon.shadow.camera.far = 500;
+  moon.shadow.normalBias = 0.03;
+  moon.shadow.radius = 4; // PCFSoft blurs the shadow edge
+  moon.shadow.intensity = 0.7; // shadows shade, they never go pitch black
+  scene.add(moon, moon.target);
   const hemi = new THREE.HemisphereLight(0x4a5a8a, 0x2a2030, 0.75);
   scene.add(hemi);
 
-  // Sky dome: deep indigo overhead fading to a magenta neon glow at the
-  // horizon, so the night reads as city air instead of a flat colour.
-  const skyCanvas = document.createElement('canvas');
-  skyCanvas.width = 4; skyCanvas.height = 256;
-  const sctx = skyCanvas.getContext('2d');
-  const skyGrad = sctx.createLinearGradient(0, 0, 0, 256);
-  skyGrad.addColorStop(0, '#0b1030');
-  skyGrad.addColorStop(0.55, '#1c2450');
-  skyGrad.addColorStop(0.8, '#432a68');
-  skyGrad.addColorStop(0.9, '#a04a7a');
-  skyGrad.addColorStop(1, '#d65a8a'); // neon-dusk horizon: pink, not plain orange
-  sctx.fillStyle = skyGrad;
-  sctx.fillRect(0, 0, 4, 256);
-  const skyTex = new THREE.CanvasTexture(skyCanvas);
-  skyTex.colorSpace = THREE.SRGBColorSpace;
+  // Sky dome wrapping the whole city in the gradient texture.
+  const skyTex = makeSkyTexture();
   const sky = new THREE.Mesh(
     new THREE.SphereGeometry(700, 24, 16),
     new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, fog: false }),
@@ -78,22 +98,13 @@ export function createRender(canvas) {
   }
 
   // Moon disc: a pale radial sprite hanging high in the sky.
-  const discCanvas = document.createElement('canvas');
-  discCanvas.width = discCanvas.height = 128;
-  const dctx = discCanvas.getContext('2d');
-  const grad = dctx.createRadialGradient(64, 64, 4, 64, 64, 64);
-  grad.addColorStop(0, 'rgba(240,246,255,1)');
-  grad.addColorStop(0.4, 'rgba(200,215,255,0.7)');
-  grad.addColorStop(1, 'rgba(160,180,255,0)');
-  dctx.fillStyle = grad;
-  dctx.fillRect(0, 0, 128, 128);
-  const discTex = new THREE.CanvasTexture(discCanvas);
-  const disc = new THREE.Sprite(new THREE.SpriteMaterial({ map: discTex, transparent: true, depthWrite: false, fog: false }));
+  const glowTex = makeGlowTexture();
+  const disc = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, transparent: true, depthWrite: false, fog: false }));
   disc.scale.set(120, 120, 1);
   disc.position.set(-320, 190, -260);
   scene.add(disc);
   // A wide, faint halo around the disc: the haze glow a camera sees.
-  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: discTex, transparent: true, opacity: 0.22, depthWrite: false, fog: false }));
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, transparent: true, opacity: 0.22, depthWrite: false, fog: false }));
   halo.scale.set(220, 220, 1);
   halo.position.copy(disc.position);
   scene.add(halo);
@@ -130,11 +141,12 @@ export function createRender(canvas) {
   const camPos = new THREE.Vector3(0, 40, 120);
   const camTarget = new THREE.Vector3(0, 0, 0);
 
+  // Chase camera: staged shots frame themselves, the title orbits the city,
+  // driving follows from behind the car, on foot from behind Dante.
   function updateCamera(world, dt) {
     const player = world.player;
     const mode = world.cameraMode;
     if (world.shotCam) {
-      // A staged shot frames its own composition (see shots.js).
       camPos.set(world.shotCam.x, world.shotCam.y, world.shotCam.z);
       camTarget.set(world.shotCam.lx, world.shotCam.ly, world.shotCam.lz);
     } else if (mode === 'title') {
@@ -167,6 +179,7 @@ export function createRender(canvas) {
     camera.lookAt(camTarget);
   }
 
+  // Damage smoke, handbrake smoke, fading puffs, drifting clouds.
   function updateEffects(world, dt) {
     for (const car of world.cars) {
       if (car.health < 40 && !car.wrecked && Math.random() < dt * 8) {

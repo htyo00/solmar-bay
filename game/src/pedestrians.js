@@ -1,6 +1,7 @@
-// Pedestrians: they stroll the sidewalk loops around their block, scatter when
-// a fast car bears down on them, and fall when a car actually hits them —
-// which is a crime the police notice. Simple capsule people, built from boxes.
+// Pedestrians: they stroll the sidewalk loops around their home block,
+// scatter when a fast car bears down on them, and fall when a car actually
+// hits them — which counts as a crime the police notice. Simple capsule
+// people, assembled from boxes.
 import * as THREE from 'three';
 import { PED_COUNT } from './config.js';
 import { pick, range } from './random.js';
@@ -8,6 +9,7 @@ import { pick, range } from './random.js';
 const SHIRTS = [0xe76f51, 0x2a9d8f, 0xf4a900, 0xc1666b, 0xe9c46a, 0x264653, 0xf5ead6];
 const SKINS = [0xd4b896, 0xc98e6b, 0x8a5a3b, 0xe8b98a];
 
+// One walker mesh: shirt torso, skin head, hair cap, arms, legs, shoes.
 export function createPedMesh(shirt, skin) {
   const group = new THREE.Group();
   const shirtMat = new THREE.MeshStandardMaterial({ color: shirt, roughness: 0.85 });
@@ -47,16 +49,16 @@ export function createPedMesh(shirt, skin) {
 export function createPeds(world, random, count = PED_COUNT) {
   const peds = [];
   for (let i = 0; i < count; i += 1) {
-    const blockX = pick(random, world.city.blocks);
-    const blockZ = pick(random, world.city.blocks);
-    const beachWatcher = i >= count - 4; // four people stand on the sand, watching the bay
+    const homeX = pick(random, world.city.blocks);
+    const homeZ = pick(random, world.city.blocks);
+    const onSand = i >= count - 4; // four people stand on the sand, watching the bay
     const ped = {
-      x: beachWatcher ? -60 + (i - (count - 4)) * 40 : blockX + range(random, -14, 14),
-      z: beachWatcher ? 118 + (i % 2) * 6 : blockZ + 14.5,
-      heading: beachWatcher ? 0 : range(random, 0, Math.PI * 2),
-      speed: beachWatcher ? 0 : range(random, 1.0, 1.5),
-      state: beachWatcher ? 'idle' : 'walk', // walk | idle | flee | fallen
-      blockX, blockZ,
+      x: onSand ? -60 + (i - (count - 4)) * 40 : homeX + range(random, -14, 14),
+      z: onSand ? 118 + (i % 2) * 6 : homeZ + 14.5,
+      heading: onSand ? 0 : range(random, 0, Math.PI * 2),
+      speed: onSand ? 0 : range(random, 1.0, 1.5),
+      state: onSand ? 'idle' : 'walk', // walk | idle | flee | fallen
+      blockX: homeX, blockZ: homeZ,
       side: Math.floor(random() * 4), // which sidewalk edge of the block
       edgeT: random(),
       fleeTimer: 0,
@@ -70,7 +72,7 @@ export function createPeds(world, random, count = PED_COUNT) {
   return peds;
 }
 
-/** A scared pedestrian thrown out of a stolen car, or one who watched a crime. */
+// A scared pedestrian thrown out of a stolen car, or one who watched a crime.
 export function addFleeingPed(world, x, z) {
   const ped = {
     x, z,
@@ -89,6 +91,7 @@ export function addFleeingPed(world, x, z) {
   return ped;
 }
 
+// The nearest fast car within 7 units of a walker, if any.
 function nearestThreat(world, ped) {
   let closest = null;
   let closestDist = 7;
@@ -101,6 +104,18 @@ function nearestThreat(world, ped) {
     }
   }
   return closest;
+}
+
+// Send a walker running away from a threat, with a throttled scream line.
+function scarePed(world, ped, threat) {
+  ped.state = 'flee';
+  ped.fleeTimer = 3;
+  ped.heading = Math.atan2(ped.x - threat.x, ped.z - threat.z);
+  // One scream per 8 s: three identical feed lines read as a bug.
+  if (world.elapsed - (world.lastScream || -99) > 8) {
+    world.lastScream = world.elapsed;
+    world.feed('A pedestrian screams and runs for cover.');
+  }
 }
 
 export function stepPeds(world, dt) {
@@ -127,16 +142,7 @@ export function stepPeds(world, dt) {
     } else if (ped.state === 'idle') {
       // Beach watchers stand still, facing the bay; a fast car still scares them off.
       const threat = nearestThreat(world, ped);
-      if (threat) {
-        ped.state = 'flee';
-        ped.fleeTimer = 3;
-        ped.heading = Math.atan2(ped.x - threat.x, ped.z - threat.z);
-        // One scream per 8 s: three identical feed lines read as a bug.
-        if (world.elapsed - (world.lastScream || -99) > 8) {
-          world.lastScream = world.elapsed;
-          world.feed('A pedestrian screams and runs for cover.');
-        }
-      }
+      if (threat) scarePed(world, ped, threat);
     } else {
       // Stroll the sidewalk loop of the home block: four edges, one after another.
       const half = 14.5;
@@ -155,15 +161,7 @@ export function stepPeds(world, dt) {
       ped.z = from[1] + (to[1] - from[1]) * ped.edgeT;
       ped.heading = Math.atan2(to[0] - from[0], to[1] - from[1]);
       const threat = nearestThreat(world, ped);
-      if (threat) {
-        ped.state = 'flee';
-        ped.fleeTimer = 3;
-        ped.heading = Math.atan2(ped.x - threat.x, ped.z - threat.z);
-        if (world.elapsed - (world.lastScream || -99) > 8) {
-          world.lastScream = world.elapsed;
-          world.feed('A pedestrian screams and runs for cover.');
-        }
-      }
+      if (threat) scarePed(world, ped, threat);
     }
     // Hit by a car? Fall down — and the police take note.
     for (const car of world.cars) {

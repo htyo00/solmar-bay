@@ -6,6 +6,10 @@ import { collideBuildings } from './city.js';
 
 let nextId = 1;
 
+function boxMesh(w, h, d, mat) {
+  return new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+}
+
 export function createCarMesh(model, color, isPolice) {
   const group = new THREE.Group();
   const len = model.len;
@@ -17,39 +21,39 @@ export function createCarMesh(model, color, isPolice) {
   const trim = new THREE.MeshStandardMaterial({ color: 0x24262a, roughness: 0.5, metalness: 0.6 });
   const rimMat = new THREE.MeshStandardMaterial({ color: 0xc8c8c8, roughness: 0.25, metalness: 0.9 });
 
-  const body = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.55, len), paint);
+  const body = boxMesh(1.9, 0.55, len, paint);
   body.position.y = 0.55;
   body.castShadow = true;
   group.add(body);
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, len * 0.45), glass);
+  const cabin = boxMesh(1.6, 0.5, len * 0.45, glass);
   cabin.position.set(0, 1.05, -len * 0.05);
   cabin.castShadow = true;
   group.add(cabin);
   // Hood and boot shut lines: a thin dark lid so the body is not one slab.
-  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.06, len * 0.22), paint);
+  const hood = boxMesh(1.7, 0.06, len * 0.22, paint);
   hood.position.set(0, 0.85, len * 0.32);
   group.add(hood);
   // Front fascia (grille + bumper) and rear bumper in one dark trim each.
-  const fascia = new THREE.Mesh(new THREE.BoxGeometry(1.92, 0.28, 0.12), trim);
+  const fascia = boxMesh(1.92, 0.28, 0.12, trim);
   fascia.position.set(0, 0.42, len / 2 - 0.02);
   group.add(fascia);
-  const rearBumper = new THREE.Mesh(new THREE.BoxGeometry(1.92, 0.28, 0.12), trim);
+  const rearBumper = boxMesh(1.92, 0.28, 0.12, trim);
   rearBumper.position.set(0, 0.42, -len / 2 + 0.02);
   group.add(rearBumper);
   // Spoiler on the Comet GT — the hero car reads as a sports coupe.
   if (model.name === 'Comet GT') {
-    const wing = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.06, 0.4), paint);
+    const wing = boxMesh(1.7, 0.06, 0.4, paint);
     wing.position.set(0, 1.12, -len / 2 + 0.25);
     wing.castShadow = true;
     group.add(wing);
     for (const side of [-0.6, 0.6]) {
-      const strut = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.28, 0.08), trim);
+      const strut = boxMesh(0.08, 0.28, 0.08, trim);
       strut.position.set(side, 0.95, -len / 2 + 0.25);
       group.add(strut);
     }
   }
   if (isPolice) {
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.92, 0.18, len * 0.6),
+    const stripe = boxMesh(1.92, 0.18, len * 0.6,
       new THREE.MeshStandardMaterial({ color: 0xf5ead6, roughness: 0.4 }));
     stripe.position.y = 0.62;
     group.add(stripe);
@@ -58,21 +62,21 @@ export function createCarMesh(model, color, isPolice) {
   const headMat = new THREE.MeshStandardMaterial({ color: 0xfff2c0, emissive: 0xffe9a8, emissiveIntensity: 3 });
   const tailMat = new THREE.MeshStandardMaterial({ color: 0xaa2222, emissive: 0xcc2211, emissiveIntensity: 2 });
   for (const side of [-0.6, 0.6]) {
-    const head = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.15, 0.08), headMat);
+    const head = boxMesh(0.35, 0.15, 0.08, headMat);
     head.position.set(side, 0.6, len / 2);
     group.add(head);
-    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.15, 0.08), tailMat);
+    const tail = boxMesh(0.35, 0.15, 0.08, tailMat);
     tail.position.set(side, 0.6, -len / 2);
     group.add(tail);
   }
-  // Light bar on police cars; the two lamps flash in police.js.
+  // Light bar on police cars; the two lamps flash in syncCarMesh.
   let lightBar = null;
   if (isPolice) {
     lightBar = new THREE.Group();
-    const red = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.18, 0.4),
+    const red = boxMesh(0.5, 0.18, 0.4,
       new THREE.MeshStandardMaterial({ color: 0xff2222, emissive: 0xff2222, emissiveIntensity: 2 }));
     red.position.x = -0.35;
-    const blue = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.18, 0.4),
+    const blue = boxMesh(0.5, 0.18, 0.4,
       new THREE.MeshStandardMaterial({ color: 0x2244ff, emissive: 0x2244ff, emissiveIntensity: 2 }));
     blue.position.x = 0.35;
     lightBar.add(red, blue);
@@ -128,7 +132,7 @@ export function carSpeedKmh(car) {
   return Math.abs(car.speed) * 3.6;
 }
 
-function forward(car) {
+function noseVector(car) {
   return { x: Math.sin(car.heading), z: Math.cos(car.heading) };
 }
 
@@ -148,10 +152,10 @@ export function stepCar(car, drive, dt, city, others) {
   // so a long drive through traffic does not grind the car to death.
   car.timeSinceHit = (car.timeSinceHit || 0) + dt;
   if (car.timeSinceHit > 3 && car.health < 100) car.health = Math.min(100, car.health + 3 * dt);
-  const fwd = forward(car);
+  const nose = noseVector(car);
   const grip = car.isPolice ? model.grip : model.grip * (drive.handbrake ? 0.45 : 1);
-  const targetSteer = drive.steer * (0.55 + 0.45 * Math.min(1, Math.abs(car.speed) / 12));
-  car.steer += (targetSteer - car.steer) * Math.min(1, dt * 8);
+  const aimSteer = drive.steer * (0.55 + 0.45 * Math.min(1, Math.abs(car.speed) / 12));
+  car.steer += (aimSteer - car.steer) * Math.min(1, dt * 8);
 
   if (drive.throttle > 0) car.speed += model.accel * drive.throttle * dt;
   else if (drive.throttle < 0) {
@@ -174,7 +178,7 @@ export function stepCar(car, drive, dt, city, others) {
   // Yaw follows steering; handbrake slides the tail out.
   const yawRate = car.steer * (car.speed / (model.len * 0.9)) * grip * 0.55;
   car.heading += yawRate * dt;
-  const nf = forward(car);
+  const nf = noseVector(car);
   let nx = car.x + nf.x * car.speed * dt;
   let nz = car.z + nf.z * car.speed * dt;
 

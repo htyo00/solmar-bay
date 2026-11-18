@@ -1,29 +1,56 @@
-// Boot and the one loop: input is read every frame, the world advances in
-// fixed 1/60 s steps (several in a slow frame, none in a fast one), and the
-// renderer paints what is there. The game moves between five screens: title,
-// play, paused, mission-complete, busted and wasted.
+// Solmar Bay — boot and the one loop.
 //
-// ?seed=N fixes the city and the traffic. ?shot=chase|title|mission|complete
-// (with &seed=N) stages that scene instead of running the loop, paints it
-// twice and sets window.__shotReady for a screenshot.
+// One module owns the screens and the clock: it reads input once per frame,
+// advances the world in fixed 1/60 s slices (up to eight per frame, so a
+// slow frame never spirals), and asks the renderer to paint the result. The
+// game lives on seven screens — title, play, paused, map, complete, busted,
+// wasted — and the same module serves the deterministic screenshot scenes:
+// ?shot=chase|title|mission|complete (plus &seed=N) stages a scene, paints
+// it twice, and raises window.__shotReady.
+//
+// ?seed=N pins the city and the traffic to one layout; without it the seed
+// is drawn at random.
 import { STEP } from './config.js';
-import { createWorld, resetWorld, stepWorld, startMission, EVENT_COMPLETE, EVENT_BUSTED, EVENT_WASTED, EVENT_OBJECTIVE, EVENT_STEAL } from './world.js';
+import {
+  createWorld,
+  resetWorld,
+  stepWorld,
+  startMission,
+  EVENT_COMPLETE,
+  EVENT_BUSTED,
+  EVENT_WASTED,
+  EVENT_OBJECTIVE,
+  EVENT_STEAL,
+} from './world.js';
 import { createRender } from './render.js';
 import { createHud } from './hud.js';
-import { createInput, ACTION_CONFIRM, ACTION_PAUSE, ACTION_MUTE, ACTION_RESTART, ACTION_MAP } from './input.js';
+import {
+  createInput,
+  ACTION_CONFIRM,
+  ACTION_PAUSE,
+  ACTION_MUTE,
+  ACTION_RESTART,
+  ACTION_MAP,
+} from './input.js';
 import { createAudio } from './audio.js';
 import { writeSave } from './save.js';
 import { stageShot } from './shots.js';
 
-const MAX_FRAME = 0.25;
+// A frame longer than this is treated as a quarter of a second, so a hitch
+// can never fast-forward the simulation.
+const MAX_DT = 0.25;
+// How many fixed steps one frame may run before the leftover time is dropped.
+const MAX_STEPS_PER_FRAME = 8;
 
-const params = new URLSearchParams(window.location.search);
-const shot = params.get('shot');
-const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
-const seed = Number.isInteger(seedParam) ? seedParam : Math.floor(Math.random() * 4294967296);
+const query = new URLSearchParams(window.location.search);
+const shotName = query.get('shot');
+const seedRaw = Number.parseInt(query.get('seed') ?? '', 10);
+const seed = Number.isInteger(seedRaw)
+  ? seedRaw
+  : Math.floor(Math.random() * 4294967296);
 
 const canvas = document.getElementById('game');
-const status = document.getElementById('status');
+const statusLine = document.getElementById('status');
 const render = createRender(canvas);
 const world = createWorld(seed, render.scene);
 const hud = createHud();
@@ -31,138 +58,146 @@ const input = createInput();
 const audio = createAudio();
 window.__solmar = { world, render };
 
-const SCREEN_TITLE = 'title';
-const SCREEN_PLAY = 'play';
-const SCREEN_PAUSED = 'paused';
-const SCREEN_MAP = 'map';
-const SCREEN_COMPLETE = 'complete';
-const SCREEN_BUSTED = 'busted';
-const SCREEN_WASTED = 'wasted';
+// The screens the game moves between.
+const S = {
+  title: 'title',
+  play: 'play',
+  paused: 'paused',
+  map: 'map',
+  complete: 'complete',
+  busted: 'busted',
+  wasted: 'wasted',
+};
 
-function cashLost() {
-  const lost = Math.round(world.save.cash * 0.1);
-  world.save.cash = Math.max(0, world.save.cash - lost);
-  return lost;
+function say(text) {
+  statusLine.textContent = text;
 }
+
+// Getting caught or killed costs a tenth of the cash on hand.
+function forfeitCash() {
+  const cut = Math.round(world.save.cash * 0.1);
+  world.save.cash = Math.max(0, world.save.cash - cut);
+  return cut;
+}
+
+// ---- screenshot mode -----------------------------------------------------
 
 function runShot(name) {
   const screen = stageShot(name, world);
-  hud.show(screen === 'title' ? 'title-screen' : screen === 'complete' ? 'complete-screen' : null);
-  if (screen === 'title') hud.setTitle(world.save);
-  if (screen === 'complete' && world.saveMissionResult) hud.setComplete(world.saveMissionResult);
-  // Sync the HUD DOM once (a staged shot never runs the live loop that does it).
+  hud.show(
+    screen === S.title ? 'title-screen' : screen === S.complete ? 'complete-screen' : null,
+  );
+  if (screen === S.title) hud.setTitle(world.save);
+  if (screen === S.complete && world.saveMissionResult) {
+    hud.setComplete(world.saveMissionResult);
+  }
+  // A staged scene never runs the live loop, so sync the HUD once by hand.
   hud.update(world, 1 / 60);
   let painted = 0;
-  function paint() {
-    // Snap the camera: the chase lerp would need many frames to settle.
+  const paint = () => {
+    // Snap the camera straight to its target: the chase lerp would take
+    // many frames to settle, and a screenshot gets two.
     render.updateCamera(world, 1);
     render.updateEffects(world, 1 / 60);
     render.render();
     painted += 1;
     if (painted < 2) requestAnimationFrame(paint);
     else window.__shotReady = true;
-  }
+  };
   requestAnimationFrame(paint);
 }
 
+// ---- live game -----------------------------------------------------------
+
 function runGame() {
-  let screen = SCREEN_TITLE;
-  let accumulator = 0;
-  let last = performance.now();
-  let frames = 0;
-  let fpsTimer = 0;
+  let screen = S.title;
+  let leftover = 0;
+  let lastTime = performance.now();
+  let frameCount = 0;
+  let fpsClock = 0;
 
-  function announce(message) {
-    status.textContent = message;
-  }
-
-  function startGame() {
+  function beginJob() {
     audio.unlock();
     resetWorld(world);
     startMission(world);
-    screen = SCREEN_PLAY;
+    screen = S.play;
     hud.show(null);
-    announce('First job. Steal the Comet GT outside the Loft.');
+    say('First job. Steal the Comet GT outside the Loft.');
   }
 
-  function toTitle() {
+  function backToTitle() {
     resetWorld(world);
     world.cameraMode = 'title';
-    screen = SCREEN_TITLE;
+    screen = S.title;
     hud.setTitle(world.save);
     hud.show('title-screen');
-    announce('Solmar Bay. Press Enter to start.');
+    say('Solmar Bay. Press Enter to start.');
   }
 
-  function endMission(kind) {
-    if (kind === 'busted') {
-      world.save.stats.busted += 1;
-      const lost = cashLost();
-      writeSave(world.save);
-      screen = SCREEN_BUSTED;
-      hud.setEnd('busted', lost);
-      hud.show('busted-screen');
-      announce('Busted. The SBPD took you in.');
-    } else {
-      world.save.stats.wasted += 1;
-      const lost = cashLost();
-      writeSave(world.save);
-      screen = SCREEN_WASTED;
-      hud.setEnd('wasted', lost);
-      hud.show('wasted-screen');
-      announce('Wasted. You woke up at St. Marina Hospital.');
-    }
+  function endRun(kind) {
+    const busted = kind === 'busted';
+    world.save.stats[busted ? 'busted' : 'wasted'] += 1;
+    const cut = forfeitCash();
+    writeSave(world.save);
+    screen = busted ? S.busted : S.wasted;
+    hud.setEnd(busted ? 'busted' : 'wasted', cut);
+    hud.show(busted ? 'busted-screen' : 'wasted-screen');
+    say(
+      busted
+        ? 'Busted. The SBPD took you in.'
+        : 'Wasted. You woke up at St. Marina Hospital.',
+    );
   }
 
   function handleActions() {
-    const actions = input.takeActions();
-    if (actions & ACTION_MUTE) {
+    const pressed = input.takeActions();
+    if (pressed & ACTION_MUTE) {
       const muted = audio.toggleMute();
       world.feed(muted ? 'Sound off.' : 'Sound on.');
     }
-    if (actions & ACTION_RESTART && (screen === SCREEN_PLAY || screen === SCREEN_PAUSED)) {
-      startGame();
+    if (pressed & ACTION_RESTART && (screen === S.play || screen === S.paused)) {
+      beginJob();
       return;
     }
-    if (actions & ACTION_CONFIRM && screen === SCREEN_TITLE) {
-      startGame();
+    if (pressed & ACTION_CONFIRM && screen === S.title) {
+      beginJob();
       return;
     }
-    if (actions & ACTION_CONFIRM && (screen === SCREEN_COMPLETE || screen === SCREEN_BUSTED || screen === SCREEN_WASTED)) {
-      startGame();
+    if (pressed & ACTION_CONFIRM && (screen === S.complete || screen === S.busted || screen === S.wasted)) {
+      beginJob();
       return;
     }
-    if (actions & ACTION_MAP && screen === SCREEN_PLAY) {
-      screen = SCREEN_MAP;
+    if (pressed & ACTION_MAP && screen === S.play) {
+      screen = S.map;
       hud.showMap(world);
       hud.show('map-screen');
-      announce('City map. Tab to close.');
+      say('City map. Tab to close.');
       return;
     }
-    if (actions & (ACTION_MAP | ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_MAP) {
-      screen = SCREEN_PLAY;
+    if (pressed & (ACTION_MAP | ACTION_PAUSE | ACTION_CONFIRM) && screen === S.map) {
+      screen = S.play;
       hud.show(null);
-      announce('Playing.');
+      say('Playing.');
       return;
     }
-    if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
+    if (pressed & ACTION_PAUSE && screen === S.play) {
+      screen = S.paused;
       hud.show('pause-screen');
-      announce('Paused.');
-    } else if (actions & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_PAUSED) {
-      screen = SCREEN_PLAY;
+      say('Paused.');
+    } else if (pressed & (ACTION_PAUSE | ACTION_CONFIRM) && screen === S.paused) {
+      screen = S.play;
       hud.show(null);
-      announce('Playing.');
+      say('Playing.');
     }
   }
 
-  function step() {
-    if (screen === SCREEN_TITLE) {
-      // Ambient city behind the title: traffic and pedestrians keep moving.
+  function advance() {
+    if (screen === S.title) {
+      // The title floats over a living city: traffic and pedestrians move.
       stepWorld(world, STEP, input, null);
       return;
     }
-    if (screen !== SCREEN_PLAY) return;
+    if (screen !== S.play) return;
     const events = stepWorld(world, STEP, input, null);
     if (world.lastImpact > 8) audio.crash();
     if (events & EVENT_OBJECTIVE) audio.mission();
@@ -172,50 +207,57 @@ function runGame() {
     }
     if (events & EVENT_COMPLETE) {
       writeSave(world.save);
-      screen = SCREEN_COMPLETE;
+      screen = S.complete;
       hud.setComplete(world.saveMissionResult);
       hud.show('complete-screen');
       audio.mission();
-      announce(`Job done. Grade ${world.saveMissionResult.grade}.`);
+      say(`Job done. Grade ${world.saveMissionResult.grade}.`);
     } else if (events & EVENT_BUSTED) {
-      endMission('busted');
+      endRun('busted');
     } else if (events & EVENT_WASTED) {
       // Dante wakes at the Loft, health restored, heat gone.
       world.player.health = 100;
-      endMission('wasted');
+      endRun('wasted');
     }
-    // Audio follows the car and the nearest cruiser.
-    const speed = world.player.inCar ? Math.abs(world.player.inCar.speed) * 3.6 : 0;
-    let nearestCop = Infinity;
-    for (const car of world.police.cars) {
-      nearestCop = Math.min(nearestCop, Math.hypot(car.x - world.player.x, car.z - world.player.z));
+    // The engine and siren mix follow the car and the closest cruiser.
+    const kmh = world.player.inCar ? Math.abs(world.player.inCar.speed) * 3.6 : 0;
+    let closestCop = Infinity;
+    for (const cruiser of world.police.cars) {
+      closestCop = Math.min(
+        closestCop,
+        Math.hypot(cruiser.x - world.player.x, cruiser.z - world.player.z),
+      );
     }
-    audio.update(speed, nearestCop);
+    audio.update(kmh, closestCop);
   }
 
   function frame(now) {
     requestAnimationFrame(frame);
-    const dt = Math.min((now - last) / 1000, MAX_FRAME);
-    last = now;
-    frames += 1;
-    fpsTimer += dt;
-    if (fpsTimer >= 1) {
-      world.fpsSample = Math.round(frames / fpsTimer);
-      frames = 0;
-      fpsTimer = 0;
+    const dt = Math.min((now - lastTime) / 1000, MAX_DT);
+    lastTime = now;
+    frameCount += 1;
+    fpsClock += dt;
+    if (fpsClock >= 1) {
+      world.fpsSample = Math.round(frameCount / fpsClock);
+      frameCount = 0;
+      fpsClock = 0;
     }
-    accumulator += dt;
+    leftover += dt;
     handleActions();
-    if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
-      let guard = 0;
-      while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY) && guard < 8) {
-        step();
-        accumulator -= STEP;
-        guard += 1;
+    if (screen === S.title || screen === S.play) {
+      let ran = 0;
+      while (
+        leftover >= STEP
+        && (screen === S.title || screen === S.play)
+        && ran < MAX_STEPS_PER_FRAME
+      ) {
+        advance();
+        leftover -= STEP;
+        ran += 1;
       }
-      if (guard >= 8) accumulator = 0;
+      if (ran >= MAX_STEPS_PER_FRAME) leftover = 0;
     } else {
-      accumulator = 0;
+      leftover = 0;
     }
     hud.update(world, dt);
     render.updateCamera(world, dt);
@@ -224,49 +266,48 @@ function runGame() {
   }
 
   // Buttons on the menu screens.
-  document.getElementById('btn-play').addEventListener('click', () => { audio.unlock(); startGame(); });
-  document.getElementById('btn-continue').addEventListener('click', () => { audio.unlock(); startGame(); });
-  document.getElementById('btn-resume').addEventListener('click', () => { screen = SCREEN_PLAY; hud.show(null); });
-  document.getElementById('btn-restart-mission').addEventListener('click', () => startGame());
-  document.getElementById('btn-save-quit').addEventListener('click', () => { writeSave(world.save); toTitle(); });
-  document.getElementById('btn-replay').addEventListener('click', () => startGame());
+  document.getElementById('btn-play').addEventListener('click', () => { audio.unlock(); beginJob(); });
+  document.getElementById('btn-continue').addEventListener('click', () => { audio.unlock(); beginJob(); });
+  document.getElementById('btn-resume').addEventListener('click', () => { screen = S.play; hud.show(null); });
+  document.getElementById('btn-restart-mission').addEventListener('click', () => beginJob());
+  document.getElementById('btn-save-quit').addEventListener('click', () => { writeSave(world.save); backToTitle(); });
+  document.getElementById('btn-replay').addEventListener('click', () => beginJob());
   document.getElementById('btn-continue-2').addEventListener('click', () => {
-    screen = SCREEN_PLAY;
+    screen = S.play;
     hud.show(null);
     world.missions.active = false;
     world.missions.objective = 'Free roam — press Enter to run the next job.';
   });
-  document.getElementById('btn-retry').addEventListener('click', () => startGame());
-  document.getElementById('btn-retry-2').addEventListener('click', () => startGame());
-  document.getElementById('btn-to-title').addEventListener('click', () => toTitle());
-  document.getElementById('btn-to-title-2').addEventListener('click', () => toTitle());
+  document.getElementById('btn-retry').addEventListener('click', () => beginJob());
+  document.getElementById('btn-retry-2').addEventListener('click', () => beginJob());
+  document.getElementById('btn-to-title').addEventListener('click', () => backToTitle());
+  document.getElementById('btn-to-title-2').addEventListener('click', () => backToTitle());
   for (const button of document.querySelectorAll('.diff-btn')) {
     button.addEventListener('click', () => {
       world.save.difficulty = button.dataset.diff;
       world.difficultyName = button.dataset.diff;
       writeSave(world.save);
-      for (const other of document.querySelectorAll('.diff-btn')) other.classList.toggle('active', other === button);
+      for (const other of document.querySelectorAll('.diff-btn')) {
+        other.classList.toggle('active', other === button);
+      }
     });
-  }
-  for (const button of document.querySelectorAll('.diff-btn')) {
     button.classList.toggle('active', button.dataset.diff === world.save.difficulty);
   }
 
   // Leaving the tab pauses a running game rather than letting the heat build unseen.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
+    if (document.hidden && screen === S.play) {
+      screen = S.paused;
       hud.show('pause-screen');
-      announce('Paused.');
+      say('Paused.');
     }
   });
 
   hud.setTitle(world.save);
   hud.show('title-screen');
-  announce('Solmar Bay. Press Enter to start.');
-  window.__solmar = { world, render };
+  say('Solmar Bay. Press Enter to start.');
   requestAnimationFrame(frame);
 }
 
-if (shot) runShot(shot);
+if (shotName) runShot(shotName);
 else runGame();

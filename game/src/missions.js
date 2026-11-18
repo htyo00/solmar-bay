@@ -1,9 +1,11 @@
-// Missions: the story chain Mara Voss hands Dante by phone. Stage 1 ships
-// mission 1 fully — steal the Comet GT, run it to the Marina pier, lose the
-// heat, deliver it — and lists the rest as the chain to come. Each mission is
-// steps with a waypoint, an objective line, a payout and a grade on time.
+// The story chain Mara Voss hands Dante over the phone. Stage 1 ships job
+// one end to end — lift the Comet GT, run it to the Marina pier, shake the
+// heat, bring it in — and names the rest of the chain as jobs to come. A
+// mission is a chain of steps, each with a waypoint, an objective line, a
+// payout and a grade against the clock.
 import { MISSIONS } from './config.js';
 
+// Fresh per-run mission state. The chain always opens on job one.
 export function createMissions(world) {
   return {
     index: 0,
@@ -22,6 +24,7 @@ export function missionName(missions) {
   return MISSIONS[missions.index].name;
 }
 
+// Time grade for a finished job: faster is better, S is the top mark.
 export function gradeFor(mission, seconds) {
   if (seconds <= mission.gradeS) return 'S';
   if (seconds <= mission.gradeA) return 'A';
@@ -29,79 +32,100 @@ export function gradeFor(mission, seconds) {
   return 'C';
 }
 
-function setObjective(world, text, waypoint) {
+// Publish a new objective line (and its map marker) and raise the event.
+function publishObjective(world, text, waypoint) {
   world.missions.objective = text;
   world.missions.waypoint = waypoint || null;
   world.missionEvents = (world.missionEvents || 0) | 8; // EVENT_OBJECTIVE
 }
 
 export function startMission(world) {
-  const missions = world.missions;
-  missions.active = true;
-  missions.done = false;
-  missions.step = 0;
-  missions.timer = 0;
+  const ms = world.missions;
+  ms.active = true;
+  ms.done = false;
+  ms.step = 0;
+  ms.timer = 0;
   const comet = world.city.cometSpot;
-  setObjective(world, 'Steal the Comet GT outside the Loft', { x: comet.x, z: comet.z, label: 'Comet GT' });
+  publishObjective(world, 'Steal the Comet GT outside the Loft', { x: comet.x, z: comet.z, label: 'Comet GT' });
   world.feed(`Mara Voss: "${MISSIONS[0].brief}"`);
 }
 
-function completeMission(world) {
-  const missions = world.missions;
-  const mission = MISSIONS[missions.index];
-  const seconds = missions.timer;
-  const grade = gradeFor(mission, seconds);
-  const payout = Math.round(mission.payout * world.difficulty.payout);
-  missions.grade = grade;
-  missions.done = true;
-  missions.active = false;
+function finishMission(world) {
+  const ms = world.missions;
+  const job = MISSIONS[ms.index];
+  const seconds = ms.timer;
+  const grade = gradeFor(job, seconds);
+  const payout = Math.round(job.payout * world.difficulty.payout);
+  ms.grade = grade;
+  ms.done = true;
+  ms.active = false;
   world.save.cash += payout;
   world.save.stats.missionsDone += 1;
   if (!world.save.carsOwned.includes('Comet GT')) world.save.carsOwned.push('Comet GT');
   if (world.save.bestGrade === null || grade < world.save.bestGrade) world.save.bestGrade = grade;
   if (world.save.bestTime === null || seconds < world.save.bestTime) world.save.bestTime = Math.round(seconds);
-  world.saveMissionResult = { mission: mission.name, grade, seconds, payout, stats: { ...missions.stats }, garage: [...world.save.carsOwned] };
-  setObjective(world, 'Job done. Mara Voss is pleased.', null);
+  world.saveMissionResult = {
+    mission: job.name,
+    grade,
+    seconds,
+    payout,
+    stats: { ...ms.stats },
+    garage: [...world.save.carsOwned],
+  };
+  publishObjective(world, 'Job done. Mara Voss is pleased.', null);
   world.feed(`Mara Voss: "Clean work, Dante. $${payout} is yours."`);
   world.missionEvents = (world.missionEvents || 0) | 16; // EVENT_COMPLETE
 }
 
+// One step of job one, keyed by the current step number. Returns nothing;
+// the step advances by writing ms.step and publishing the next objective.
+function advanceJobOne(world, px, pz) {
+  const ms = world.missions;
+  const player = world.player;
+  const pier = world.city.pier;
+  switch (ms.step) {
+    case 0: {
+      if (player.inCar && player.inCar.model.name === 'Comet GT') {
+        ms.step = 1;
+        publishObjective(world, 'Drive the Comet GT to the Marina pier', { x: pier.x, z: pier.z, label: 'Marina pier' });
+      }
+      break;
+    }
+    case 1: {
+      if (Math.hypot(px - pier.x, pz - pier.z) < 18) {
+        ms.step = 2;
+        publishObjective(world, 'Lose the cops — break line of sight until the stars drop', null);
+      }
+      break;
+    }
+    case 2: {
+      if (world.wanted.stars === 0) {
+        ms.step = 3;
+        publishObjective(world, 'Deliver the Comet GT at the pier', { x: pier.x, z: pier.z, label: 'Deliver here' });
+      }
+      break;
+    }
+    case 3: {
+      // 16 units: the car stops on the sand beside the pier, not on its planks.
+      if (player.inCar && Math.hypot(px - pier.x, pz - pier.z) < 16) finishMission(world);
+      break;
+    }
+    default:
+      break;
+  }
+}
+
 export function stepMissions(world, dt, events) {
-  const out = world.missionEvents || 0;
+  const pending = world.missionEvents || 0;
   world.missionEvents = 0;
-  const missions = world.missions;
-  if (!missions.active) return out;
-  missions.timer += dt;
+  const ms = world.missions;
+  if (!ms.active) return pending;
+  ms.timer += dt;
   const player = world.player;
   const px = player.inCar ? player.inCar.x : player.x;
   const pz = player.inCar ? player.inCar.z : player.z;
-  if (events & 1) missions.stats.carsStolen += 1; // EVENT_STEAL
-  if (player.inCar) missions.stats.topSpeed = Math.max(missions.stats.topSpeed, Math.abs(player.inCar.speed) * 3.6);
-
-  if (missions.index === 0) {
-    if (missions.step === 0) {
-      if (player.inCar && player.inCar.model.name === 'Comet GT') {
-        missions.step = 1;
-        const pier = world.city.pier;
-        setObjective(world, 'Drive the Comet GT to the Marina pier', { x: pier.x, z: pier.z, label: 'Marina pier' });
-      }
-    } else if (missions.step === 1) {
-      const pier = world.city.pier;
-      if (Math.hypot(px - pier.x, pz - pier.z) < 18) {
-        missions.step = 2;
-        setObjective(world, 'Lose the cops — break line of sight until the stars drop', null);
-      }
-    } else if (missions.step === 2) {
-      if (world.wanted.stars === 0) {
-        missions.step = 3;
-        const pier = world.city.pier;
-        setObjective(world, 'Deliver the Comet GT at the pier', { x: pier.x, z: pier.z, label: 'Deliver here' });
-      }
-    } else if (missions.step === 3) {
-      const pier = world.city.pier;
-      // 16 units: the car stops on the sand beside the pier, not on its planks.
-      if (player.inCar && Math.hypot(px - pier.x, pz - pier.z) < 16) completeMission(world);
-    }
-  }
-  return (world.missionEvents || 0) | out;
+  if (events & 1) ms.stats.carsStolen += 1; // EVENT_STEAL
+  if (player.inCar) ms.stats.topSpeed = Math.max(ms.stats.topSpeed, Math.abs(player.inCar.speed) * 3.6);
+  if (ms.index === 0) advanceJobOne(world, px, pz);
+  return (world.missionEvents || 0) | pending;
 }

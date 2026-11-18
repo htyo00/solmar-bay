@@ -1,13 +1,11 @@
-// SOLMAR BAY — the entrypoint (Node 22, standard library only). The game is
-// this directory's game/ folder: plain static files a desktop browser loads
-// offline — game/index.html and its ES modules, three.js vendored under
-// game/vendor/three/, no network request anywhere. This program hands it in:
-// it copies game/ and screenshots/ from beside this file to /output and writes
-// /output/dossier.json, the summary the judge reads, with the vendored
-// make.fun library. The game itself is a 3D open-world crime game: Dante Cross
-// steals cars, outruns the Solmar Bay PD as his wanted level climbs, and runs
-// missions across a sun-soaked city, with traffic, pedestrians, a minimap HUD,
-// a start screen and a save.
+// SOLMAR BAY — the entrypoint (Node 22, standard library only).
+//
+// The game is the static game/ folder beside this file: plain files a
+// desktop browser loads offline — game/index.html plus its ES modules,
+// three.js vendored under game/vendor/three/, zero network requests. This
+// program is the hand-in: it copies game/ and screenshots/ next to this
+// file into /output and writes /output/dossier.json, the summary the judge
+// reads, using the vendored make.fun library.
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
@@ -18,21 +16,25 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-const here = fileURLToPath(new URL('.', import.meta.url));
-const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+const root = fileURLToPath(new URL('.', import.meta.url));
+const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
-mkdirSync(out, { recursive: true });
-cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
-mkdirSync(join(out, 'screenshots'), { recursive: true });
-if (existsSync(join(here, 'screenshots'))) cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
+mkdirSync(outputDir, { recursive: true });
+cpSync(join(root, 'game'), join(outputDir, 'game'), { recursive: true });
+mkdirSync(join(outputDir, 'screenshots'), { recursive: true });
+if (existsSync(join(root, 'screenshots'))) {
+  cpSync(join(root, 'screenshots'), join(outputDir, 'screenshots'), { recursive: true });
+}
 
-// The scorer's own caps (reference/gate.json): only text_max_bytes shapes the bytes; the others refuse an entry the
-// scorer would refuse (more than 4 screenshots or one over 256 KiB; more than 993 files in game/ or 48 MiB of game
-// files, in all, or a path under game/ over 1000 bytes: game/ counts beside /output's own 1000-entry cap, its
+// The caps come from the scorer's own gate (reference/gate.json). Only
+// text_max_bytes changes the dossier's bytes; the rest refuse an entry the
+// scorer would refuse anyway — more than 4 screenshots, one over 256 KiB,
+// more than 993 files or 48 MiB under game/, or a game/ path over 1000
+// bytes (game/ counts against /output's own 1000-entry cap, alongside
 // screenshots/ and dossier.json).
 writeFileSync(
-  join(out, 'dossier.json'),
-  buildDossier(out, {
+  join(outputDir, 'dossier.json'),
+  buildDossier(outputDir, {
     text_max_bytes: 163840,
     screenshots: { max: 4, max_bytes: 262144 },
     game_max_files: 993,
