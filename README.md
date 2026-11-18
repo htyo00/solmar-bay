@@ -1,3 +1,7 @@
+[![make.fun gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![gta6-01 rank](https://make.fun/badge/gta6-01/htyo00/solmar-bay/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![gta6-01 reward](https://make.fun/badge/gta6-01/htyo00/solmar-bay/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+
 # SOLMAR BAY — open-world crime: steal cars, outrun the law, run the city
 
 [![make.fun](https://make.fun/badge.svg)](https://make.fun/c/gta6-01)
