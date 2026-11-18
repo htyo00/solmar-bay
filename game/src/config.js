@@ -41,7 +41,7 @@ export const CFG = {
   cruiserSpawnDist: 90,
   footSpawnDist: 42,
   // traffic + peds
-  trafficCars: 14,
+  trafficCars: 20,
   peds: 22,
   // mission 1 payouts by grade
   pay: { S: 1200, A: 1000, B: 900, C: 850 },

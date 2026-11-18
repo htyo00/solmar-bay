@@ -66,7 +66,7 @@ export function createPolice(G) {
     const dx = wp.x - car.pos.x, dz = wp.z - car.pos.z;
     if (Math.hypot(dx, dz) < 5) { car.route.shift(); return; }
     const desired = Math.atan2(-dx, -dz);
-    const steer = clamp(angleDiff(car.heading, desired) * 1.8, -1, 1);
+    const steer = clamp(-angleDiff(car.heading, desired) * 1.8, -1, 1);
     // close in and ram the player's car gently
     const pd = Math.hypot(G.player.pos.x - car.pos.x, G.player.pos.z - car.pos.z);
     const throttle = pd < 4 ? 0.5 : 0.95;

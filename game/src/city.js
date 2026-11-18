@@ -24,7 +24,7 @@ export const PLACES = {
   loft: { x: 152, z: -152 },
   cometSpawn: { x: 200, z: -150, heading: Math.PI }, // parked on Ocean Drive, nose south
   playerStart: { x: 186, z: -118, heading: Math.PI * 0.5 },
-  pierDrop: { x: 312, z: 100 },
+  pierDrop: { x: 244, z: 100 },
   oceanCoin: { x: 200, z: 0 },
   plazaCoin: { x: -52, z: 52 },
   dockCoin: { x: -148, z: 148 },

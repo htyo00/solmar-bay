@@ -101,10 +101,10 @@ export function createTraffic(G) {
       driveCar(G, car, dt, ctrl);
       // running over Dante on foot hurts
       if (!G.player.inCar && G.player.health > 0) {
-        if (dist2(car.pos.x, car.pos.z, G.player.pos.x, G.player.pos.z) < 7) {
+        if (dist2(car.pos.x, car.pos.z, G.player.pos.x, G.player.pos.z) < 25) {
           if (!car.hitCd || car.hitCd <= 0) {
             car.hitCd = 0.9;
-            G.player.takeDamage(14, 'run over');
+            G.player.takeDamage(40, 'run over');
             G.hud.flash('HIT BY TRAFFIC');
           }
         }
