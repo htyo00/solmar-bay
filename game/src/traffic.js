@@ -17,13 +17,29 @@ export function createTraffic(G) {
     car.cruise = range(rng, 9, 14);
     car.route = null;
     car.wait = range(rng, 0, 2);
+    car.blockedT = 0;
+    car.stuckT = 0;
+    car.backup = 0;
     cars.push(car);
   }
 
   function reRoute(car) {
     const tx = pick(rng, CFG.roadLines) + range(rng, -2, 2);
     const tz = pick(rng, CFG.roadLines) + range(rng, -2, 2);
-    car.route = roadRoute(car.pos.x, car.pos.z, tx, tz);
+    const raw = roadRoute(car.pos.x, car.pos.z, tx, tz);
+    // Drive on the right: shift every waypoint to the right of its leg, so
+    // cars meeting head-on pass each other instead of stopping nose to nose
+    // in the middle of the road. Facing east the right side is south (+z),
+    // facing south it is west (-x), and so on.
+    let px = car.pos.x, pz = car.pos.z;
+    car.route = raw.map((w) => {
+      const dx = w.x - px, dz = w.z - pz;
+      let ox = 0, oz = 0;
+      if (Math.abs(dx) > Math.abs(dz)) oz = dx > 0 ? 2.5 : -2.5;
+      else ox = dz > 0 ? -2.5 : 2.5;
+      px = w.x; pz = w.z;
+      return { x: w.x + ox, z: w.z + oz };
+    });
   }
 
   function blockedAhead(car) {
@@ -48,11 +64,41 @@ export function createTraffic(G) {
       const d = Math.hypot(dx, dz);
       if (d < 4) { car.route.shift(); continue; }
       const desired = Math.atan2(-dx, -dz);
-      const steer = Math.max(-1, Math.min(1, angleDiff(car.heading, desired) * 1.6));
+      // steer sign matters: driveCar turns the heading DOWN for steer > 0
+      // (that is what KeyD does), so steering toward a desired heading that
+      // sits above the current one needs a NEGATIVE steer. The old sign
+      // turned every car away from its waypoint instead.
+      const steer = Math.max(-1, Math.min(1, -angleDiff(car.heading, desired) * 1.6));
       const blocked = blockedAhead(car);
-      const target = blocked ? 0 : Math.min(car.cruise, car.top);
-      const throttle = car.speed < target ? 0.7 : 0;
-      driveCar(G, car, dt, { throttle, steer, nitro: false, brake: blocked });
+      // A car that waits behind a jam or grinds against a wall forever
+      // would freeze its street. A stopped car cannot turn (steering needs
+      // speed), so after a few seconds with no progress it backs up to make
+      // room, then takes a fresh route somewhere else.
+      let ctrl;
+      if (car.backup > 0) {
+        car.backup -= dt;
+        ctrl = { throttle: -0.6, steer: 0, nitro: false, brake: false };
+      } else if (blocked) {
+        car.blockedT += dt;
+        car.stuckT = 0;
+        if (car.blockedT > 3) {
+          reRoute(car);
+          car.blockedT = 0;
+          car.backup = 1.2;
+        }
+        ctrl = { throttle: 0, steer, nitro: false, brake: true };
+      } else {
+        car.blockedT = 0;
+        if (car.speed < 0.5) {
+          car.stuckT += dt;
+          if (car.stuckT > 4) { reRoute(car); car.stuckT = 0; }
+        } else {
+          car.stuckT = 0;
+        }
+        const target = Math.min(car.cruise, car.top);
+        ctrl = { throttle: car.speed < target ? 0.7 : 0, steer, nitro: false, brake: false };
+      }
+      driveCar(G, car, dt, ctrl);
       // running over Dante on foot hurts
       if (!G.player.inCar && G.player.health > 0) {
         if (dist2(car.pos.x, car.pos.z, G.player.pos.x, G.player.pos.z) < 7) {
