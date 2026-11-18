@@ -10,7 +10,7 @@ import { STEP } from './config.js';
 import { createWorld, resetWorld, stepWorld, startMission, EVENT_COMPLETE, EVENT_BUSTED, EVENT_WASTED, EVENT_OBJECTIVE, EVENT_STEAL } from './world.js';
 import { createRender } from './render.js';
 import { createHud } from './hud.js';
-import { createInput, ACTION_CONFIRM, ACTION_PAUSE, ACTION_MUTE, ACTION_RESTART } from './input.js';
+import { createInput, ACTION_CONFIRM, ACTION_PAUSE, ACTION_MUTE, ACTION_RESTART, ACTION_MAP } from './input.js';
 import { createAudio } from './audio.js';
 import { writeSave } from './save.js';
 import { stageShot } from './shots.js';
@@ -34,6 +34,7 @@ window.__solmar = { world, render };
 const SCREEN_TITLE = 'title';
 const SCREEN_PLAY = 'play';
 const SCREEN_PAUSED = 'paused';
+const SCREEN_MAP = 'map';
 const SCREEN_COMPLETE = 'complete';
 const SCREEN_BUSTED = 'busted';
 const SCREEN_WASTED = 'wasted';
@@ -129,6 +130,19 @@ function runGame() {
     }
     if (actions & ACTION_CONFIRM && (screen === SCREEN_COMPLETE || screen === SCREEN_BUSTED || screen === SCREEN_WASTED)) {
       startGame();
+      return;
+    }
+    if (actions & ACTION_MAP && screen === SCREEN_PLAY) {
+      screen = SCREEN_MAP;
+      hud.showMap(world);
+      hud.show('map-screen');
+      announce('City map. Tab to close.');
+      return;
+    }
+    if (actions & (ACTION_MAP | ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_MAP) {
+      screen = SCREEN_PLAY;
+      hud.show(null);
+      announce('Playing.');
       return;
     }
     if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {

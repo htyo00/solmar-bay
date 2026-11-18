@@ -60,7 +60,7 @@ function completeMission(world) {
   if (!world.save.carsOwned.includes('Comet GT')) world.save.carsOwned.push('Comet GT');
   if (world.save.bestGrade === null || grade < world.save.bestGrade) world.save.bestGrade = grade;
   if (world.save.bestTime === null || seconds < world.save.bestTime) world.save.bestTime = Math.round(seconds);
-  world.saveMissionResult = { mission: mission.name, grade, seconds, payout, stats: { ...missions.stats } };
+  world.saveMissionResult = { mission: mission.name, grade, seconds, payout, stats: { ...missions.stats }, garage: [...world.save.carsOwned] };
   setObjective(world, 'Job done. Mara Voss is pleased.', null);
   world.feed(`Mara Voss: "Clean work, Dante. $${payout} is yours."`);
   world.missionEvents = (world.missionEvents || 0) | 16; // EVENT_COMPLETE

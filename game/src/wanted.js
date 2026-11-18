@@ -1,6 +1,6 @@
 // The wanted system: one to five stars. Crimes add a star (each crime type has
 // a cooldown, so one bad minute cannot jump straight to five). Break line of
-// sight — no police unit close for eight seconds — and the stars blink, then
+// sight — no police unit close for a few seconds — and the stars blink, then
 // drop one at a time until Dante is clean again.
 import { WANTED } from './config.js';
 
@@ -23,7 +23,7 @@ const CRIME_LINES = {
 export function crime(world, type) {
   const wanted = world.wanted;
   if (wanted.cooldowns[type] > 0) return false;
-  wanted.cooldowns[type] = WANTED.crimeCooldown;
+  wanted.cooldowns[type] = type === 'ramCop' ? WANTED.ramCopCooldown : WANTED.crimeCooldown;
   if (wanted.stars < WANTED.max) {
     wanted.stars += 1;
     wanted.loseTimer = 0;
@@ -60,7 +60,7 @@ export function stepWanted(world, dt) {
     return;
   }
   const near = nearestPoliceDist(world);
-  if (near > 55) {
+  if (near > WANTED.loseDistance) {
     wanted.loseTimer += dt;
     if (wanted.loseTimer > WANTED.loseSightSeconds) {
       wanted.blinking = true;
@@ -70,6 +70,7 @@ export function stepWanted(world, dt) {
         wanted.loseTimer = 0;
         wanted.blinkTimer = 0;
         wanted.blinking = false;
+        if (wanted.stars === 0) world.save.stats.copsLost += 1; // escaped: counts toward REP
         world.feed(wanted.stars === 0 ? 'Clean. The heat is off — for now.' : 'You lost a star. Keep moving.');
       }
     }

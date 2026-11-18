@@ -10,22 +10,41 @@ import { stepCar } from './vehicles.js';
 export function createPlayerMesh() {
   const group = new THREE.Group();
   const jacket = new THREE.MeshStandardMaterial({ color: 0x264653, roughness: 0.8 });
+  const shirt = new THREE.MeshStandardMaterial({ color: 0xf5ead6, roughness: 0.8 });
   const skin = new THREE.MeshStandardMaterial({ color: 0xd4b896, roughness: 0.7 });
   const jeans = new THREE.MeshStandardMaterial({ color: 0x2a3a4a, roughness: 0.9 });
+  const hairMat = new THREE.MeshStandardMaterial({ color: 0x1a1210, roughness: 0.9 });
+  const shoeMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.6 });
   const torso = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.9, 0.4), jacket);
   torso.position.y = 1.15;
   torso.castShadow = true;
   group.add(torso);
+  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.7, 0.06), shirt); // open jacket, white shirt
+  chest.position.set(0, 1.18, 0.21);
+  group.add(chest);
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.26, 10, 8), skin);
   head.position.y = 1.85;
   head.castShadow = true;
   group.add(head);
+  const hair = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.18, 0.5), hairMat);
+  hair.position.y = 2.06;
+  group.add(hair);
+  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.75, 0.24), jacket);
+  armL.position.set(-0.46, 1.15, 0);
+  const armR = armL.clone();
+  armR.position.x = 0.46;
+  group.add(armL, armR);
   const legL = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.8, 0.3), jeans);
   legL.position.set(-0.18, 0.4, 0);
   const legR = legL.clone();
   legR.position.x = 0.18;
   group.add(legL, legR);
-  group.userData = { legL, legR, torso };
+  const shoeL = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.12, 0.42), shoeMat);
+  shoeL.position.set(-0.18, 0.06, 0.05);
+  const shoeR = shoeL.clone();
+  shoeR.position.x = 0.18;
+  group.add(shoeL, shoeR);
+  group.userData = { legL, legR, torso, armL, armR };
   return group;
 }
 
@@ -38,6 +57,7 @@ export function createPlayer(city) {
     camYaw: city.start.heading,
     speed: 0,
     health: PLAYER.health,
+    armor: 0, // SBPD vest: absorbs damage before health does
     walkPhase: 0,
     inCar: null,
     stealTarget: null,
@@ -69,6 +89,8 @@ function syncPlayerMesh(player, dt) {
   const swing = Math.sin(player.walkPhase) * 0.5 * Math.min(1, player.speed / 6);
   group.userData.legL.rotation.x = swing;
   group.userData.legR.rotation.x = -swing;
+  group.userData.armL.rotation.x = -swing * 0.8;
+  group.userData.armR.rotation.x = swing * 0.8;
   group.userData.torso.rotation.x = Math.min(0.15, player.speed * 0.008);
 }
 
@@ -160,6 +182,7 @@ export function drivingInput(input) {
     throttle: (input.forward() ? 1 : 0) - (input.back() ? 1 : 0),
     steer: (input.left() ? 1 : 0) - (input.right() ? 1 : 0),
     handbrake: input.handbrake(),
+    nitro: input.run(), // Shift in a car burns the nitro meter
   };
 }
 

@@ -46,6 +46,11 @@ function createHeliMesh() {
   target.position.set(0, -40, 0);
   light.target = target;
   group.add(light, target);
+  // The visible searchlight beam: a faint cone from the heli to the street.
+  const beam = new THREE.Mesh(new THREE.ConeGeometry(4.5, 48, 16, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0xfff2c0, transparent: true, opacity: 0.08, side: THREE.DoubleSide, depthWrite: false }));
+  beam.position.y = -24;
+  group.add(beam);
   group.userData = { rotor, light };
   return group;
 }
@@ -58,6 +63,7 @@ export function createPolice(world) {
     cars: [], // police cars, also in world.cars
     footCops: [], // { x, z, heading, phase, grabTimer, group }
     roadblock: [], // parked police cars forming a block
+    lastSeen: null, // { x, z } where Dante was last seen by a cruiser (see below)
     heli,
     heliAngle: 0,
     spawnTimer: 0,
@@ -93,16 +99,39 @@ function angleDiff(a, b) {
 
 function stepPoliceCar(world, car, dt, random) {
   const player = world.player;
-  const targetX = player.inCar ? player.inCar.x : player.x;
-  const targetZ = player.inCar ? player.inCar.z : player.z;
+  const px = player.inCar ? player.inCar.x : player.x;
+  const pz = player.inCar ? player.inCar.z : player.z;
+  // LAST-SEEN targeting (GTA search behaviour): a cruiser only knows where
+  // Dante IS when it is close enough to see him (within loseDistance);
+  // further away it drives to where he was LAST SEEN. Without this the
+  // cruisers home perfectly forever and a star can never drop — the player
+  // must be able to break contact by outrunning them (round 20: the lap
+  // never held a 40-unit gap, rams stacked the stars 1 -> 4 and the car
+  // got pinned at the map edge). lastSeen is refreshed by stepPolice
+  // whenever any cruiser is close; a cruiser that arrives at a stale
+  // lastSeen mills around there while Dante slips away.
+  const seen = world.police.lastSeen;
+  const far = seen && Math.hypot(px - car.x, pz - car.z) > WANTED.loseDistance;
+  const targetX = far ? seen.x : px;
+  const targetZ = far ? seen.z : pz;
   const dist = Math.hypot(targetX - car.x, targetZ - car.z);
   let wantHeading;
   if (dist > 30) {
-    // Follow the road graph toward the player.
-    const next = nextNodeToward(world.city, car.x, car.z, targetX, targetZ, random);
+    // Follow the road graph toward the player. The target node is STICKY:
+    // commit to a route and re-plan every 2 s, so the cruiser neither
+    // re-rolls (and U-turns) every frame nor chases a stale node forever
+    // when it gets wedged against a building.
+    car.repathTimer = (car.repathTimer || 0) - dt;
+    if (!car.targetNode || car.repathTimer <= 0
+      || Math.hypot(car.targetNode.x - car.x, car.targetNode.z - car.z) < 8) {
+      car.targetNode = nextNodeToward(world.city, car.x, car.z, targetX, targetZ, random);
+      car.repathTimer = 2;
+    }
+    const next = car.targetNode;
     wantHeading = Math.atan2(next.x - car.x, next.z - car.z);
   } else {
     // Close in: drive straight at the target and ram.
+    car.targetNode = null;
     wantHeading = Math.atan2(targetX - car.x, targetZ - car.z);
   }
   const steer = Math.max(-1, Math.min(1, angleDiff(wantHeading, car.heading) * 1.8));
@@ -110,9 +139,39 @@ function stepPoliceCar(world, car, dt, random) {
   const model = { ...car.model, topSpeed: car.model.topSpeed * boost };
   const saved = car.model;
   car.model = model;
-  const impact = stepCar(car, { throttle: 1, steer, handbrake: false }, dt, world.city, world.cars);
+  // A cruiser hunting a driver rams at full speed. A cruiser hunting Dante
+  // ON FOOT brakes to a stop beside him — otherwise it just drives through
+  // him forever, never slows below the foot-cop spawn speed, and no cop
+  // ever gets out (that is why BUSTED never fired in the playtests).
+  // After a hard ram the cruiser backs off for 2 s instead of grinding
+  // into the player again immediately — without a gap the player can never
+  // drive away from a pin (probe-evade2: two cruisers ground the Comet to
+  // 15 health in a block pocket and it never got out; the pier drive
+  // failed at the steal three runs running for the same reason).
+  car.ramRecover = Math.max(0, (car.ramRecover || 0) - dt);
+  let throttle = 1;
+  if (car.ramRecover > 0) {
+    throttle = -0.5; // back off, give the player room to pull away
+  } else if (!player.inCar) {
+    const targetSpeed = Math.min(model.topSpeed * 0.5, dist * 0.6);
+    throttle = car.speed < targetSpeed ? 1 : (car.speed > targetSpeed + 1 ? -1 : 0);
+  }
+  const impact = stepCar(car, { throttle, steer, handbrake: false }, dt, world.city, world.cars);
   car.model = saved;
-  if (impact > 8 && player.inCar && Math.hypot(car.x - player.inCar.x, car.z - player.inCar.z) < 5) {
+  if (impact > 8) car.ramRecover = 2;
+  // A ram counts as the player's crime only when Dante is actually moving
+  // TOWARD the cruiser — his velocity, not just where he faces. A cruiser
+  // rear-ending him, or ramming him while he sits still, is the SBPD's
+  // doing, not his (probe 2: a pinned, stationary Comet collected stars
+  // 1 -> 5 from cruisers ramming it head-on).
+  const rdx = car.x - player.x;
+  const rdz = car.z - player.z;
+  const rdist = Math.hypot(rdx, rdz);
+  const facing = player.inCar
+    ? (Math.sin(player.inCar.heading) * rdx + Math.cos(player.inCar.heading) * rdz) / (rdist || 1) : -1;
+  const toward = player.inCar && Math.abs(player.inCar.speed) > 3
+    ? Math.sign(player.inCar.speed) * facing : -1;
+  if (impact > 8 && player.inCar && toward > 0.3 && rdist < 5) {
     world.crime('ramCop');
   }
   // Player on foot and the cruiser is stopped beside him: a cop gets out.
@@ -208,6 +267,13 @@ function stepHeli(world, dt) {
 export function stepPolice(world, dt, random) {
   let events = 0;
   const want = WANTED.policePerStar[Math.min(WANTED.max, world.wanted.stars)];
+  // Refresh lastSeen while any cruiser can still see Dante; once every
+  // cruiser is further than loseDistance, the position freezes and the
+  // pack searches the last-seen spot instead of homing perfectly.
+  const px = world.player.inCar ? world.player.inCar.x : world.player.x;
+  const pz = world.player.inCar ? world.player.inCar.z : world.player.z;
+  const anyClose = world.police.cars.some((c) => Math.hypot(c.x - px, c.z - pz) < WANTED.loseDistance);
+  if (anyClose) world.police.lastSeen = { x: px, z: pz };
   world.police.spawnTimer -= dt;
   while (world.police.cars.length < want && world.police.spawnTimer <= 0) {
     spawnPoliceCar(world, random);

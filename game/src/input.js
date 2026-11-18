@@ -7,6 +7,7 @@ export const ACTION_PAUSE = 2;
 export const ACTION_STEAL = 4; // E held (read as a held key, not a one-shot)
 export const ACTION_MUTE = 8;
 export const ACTION_RESTART = 16;
+export const ACTION_MAP = 32;
 
 const FORWARD = new Set(['KeyW', 'ArrowUp']);
 const BACK = new Set(['KeyS', 'ArrowDown']);
@@ -19,6 +20,7 @@ const CONFIRM = new Set(['Enter']);
 const PAUSE = new Set(['KeyP', 'Escape']);
 const MUTE = new Set(['KeyM']);
 const RESTART = new Set(['KeyR']);
+const MAP = new Set(['Tab']); // M stays mute; Tab opens the city map
 
 export function createInput() {
   const held = new Set();
@@ -33,8 +35,9 @@ export function createInput() {
     else if (PAUSE.has(event.code)) actions |= ACTION_PAUSE;
     else if (MUTE.has(event.code)) actions |= ACTION_MUTE;
     else if (RESTART.has(event.code)) actions |= ACTION_RESTART;
+    else if (MAP.has(event.code)) actions |= ACTION_MAP;
     if (FORWARD.has(event.code) || BACK.has(event.code) || LEFT.has(event.code) || RIGHT.has(event.code)
-      || STEAL.has(event.code) || HANDBRAKE.has(event.code) || RUN.has(event.code)) event.preventDefault();
+      || STEAL.has(event.code) || HANDBRAKE.has(event.code) || RUN.has(event.code) || MAP.has(event.code)) event.preventDefault();
   });
   window.addEventListener('keyup', (event) => held.delete(event.code));
   // A key released while the tab is hidden never sends keyup: let go on blur.

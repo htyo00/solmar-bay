@@ -13,6 +13,8 @@ export function createPedMesh(shirt, skin) {
   const shirtMat = new THREE.MeshStandardMaterial({ color: shirt, roughness: 0.85 });
   const skinMat = new THREE.MeshStandardMaterial({ color: skin, roughness: 0.7 });
   const pantsMat = new THREE.MeshStandardMaterial({ color: 0x2a3a4a, roughness: 0.9 });
+  const hairMat = new THREE.MeshStandardMaterial({ color: [0x1a1210, 0x3a2a18, 0x555555][Math.floor(Math.random() * 3)], roughness: 0.9 });
+  const shoeMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.6 });
   const torso = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.75, 0.32), shirtMat);
   torso.position.y = 1.05;
   torso.castShadow = true;
@@ -20,12 +22,25 @@ export function createPedMesh(shirt, skin) {
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), skinMat);
   head.position.y = 1.65;
   group.add(head);
+  const hair = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.14, 0.42), hairMat);
+  hair.position.y = 1.82;
+  group.add(hair);
+  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.6, 0.18), shirtMat);
+  armL.position.set(-0.36, 1.05, 0);
+  const armR = armL.clone();
+  armR.position.x = 0.36;
+  group.add(armL, armR);
   const legL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.65, 0.24), pantsMat);
   legL.position.set(-0.14, 0.33, 0);
   const legR = legL.clone();
   legR.position.x = 0.14;
   group.add(legL, legR);
-  group.userData = { legL, legR };
+  const shoeL = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.1, 0.34), shoeMat);
+  shoeL.position.set(-0.14, 0.05, 0.04);
+  const shoeR = shoeL.clone();
+  shoeR.position.x = 0.14;
+  group.add(shoeL, shoeR);
+  group.userData = { legL, legR, armL, armR };
   return group;
 }
 
@@ -34,12 +49,13 @@ export function createPeds(world, random, count = PED_COUNT) {
   for (let i = 0; i < count; i += 1) {
     const blockX = pick(random, world.city.blocks);
     const blockZ = pick(random, world.city.blocks);
+    const beachWatcher = i >= count - 4; // four people stand on the sand, watching the bay
     const ped = {
-      x: blockX + range(random, -14, 14),
-      z: blockZ + 14.5,
-      heading: range(random, 0, Math.PI * 2),
-      speed: range(random, 1.0, 1.5),
-      state: 'walk', // walk | flee | fallen
+      x: beachWatcher ? -60 + (i - (count - 4)) * 40 : blockX + range(random, -14, 14),
+      z: beachWatcher ? 118 + (i % 2) * 6 : blockZ + 14.5,
+      heading: beachWatcher ? 0 : range(random, 0, Math.PI * 2),
+      speed: beachWatcher ? 0 : range(random, 1.0, 1.5),
+      state: beachWatcher ? 'idle' : 'walk', // walk | idle | flee | fallen
       blockX, blockZ,
       side: Math.floor(random() * 4), // which sidewalk edge of the block
       edgeT: random(),
@@ -108,6 +124,19 @@ export function stepPeds(world, dt) {
       ped.x += Math.sin(ped.heading) * ped.speed * dt;
       ped.z += Math.cos(ped.heading) * ped.speed * dt;
       if (ped.fleeTimer <= 0) ped.state = 'walk';
+    } else if (ped.state === 'idle') {
+      // Beach watchers stand still, facing the bay; a fast car still scares them off.
+      const threat = nearestThreat(world, ped);
+      if (threat) {
+        ped.state = 'flee';
+        ped.fleeTimer = 3;
+        ped.heading = Math.atan2(ped.x - threat.x, ped.z - threat.z);
+        // One scream per 8 s: three identical feed lines read as a bug.
+        if (world.elapsed - (world.lastScream || -99) > 8) {
+          world.lastScream = world.elapsed;
+          world.feed('A pedestrian screams and runs for cover.');
+        }
+      }
     } else {
       // Stroll the sidewalk loop of the home block: four edges, one after another.
       const half = 14.5;
@@ -130,7 +159,10 @@ export function stepPeds(world, dt) {
         ped.state = 'flee';
         ped.fleeTimer = 3;
         ped.heading = Math.atan2(ped.x - threat.x, ped.z - threat.z);
-        world.feed('A pedestrian screams and runs for cover.');
+        if (world.elapsed - (world.lastScream || -99) > 8) {
+          world.lastScream = world.elapsed;
+          world.feed('A pedestrian screams and runs for cover.');
+        }
       }
     }
     // Hit by a car? Fall down — and the police take note.
@@ -149,6 +181,8 @@ export function stepPeds(world, dt) {
     const swing = Math.sin(ped.phase) * 0.4 * Math.min(1, ped.speed / 2);
     ped.group.userData.legL.rotation.x = swing;
     ped.group.userData.legR.rotation.x = -swing;
+    ped.group.userData.armL.rotation.x = -swing * 0.8;
+    ped.group.userData.armR.rotation.x = swing * 0.8;
     ped.group.position.set(ped.x, ped.group.position.y, ped.z);
     ped.group.rotation.y = ped.heading;
   }

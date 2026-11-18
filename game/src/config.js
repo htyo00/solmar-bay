@@ -35,10 +35,10 @@ export const CAR_MODELS = [
   { name: 'Harbor Bus', color: 0x4a403a, topSpeed: 26, accel: 8, grip: 1.7, price: 900, len: 6.5 },
 ];
 
-export const POLICE_CAR = { name: 'SBPD Interceptor', color: 0x1d3557, topSpeed: 40, accel: 17, grip: 2.7, len: 4.3 };
+export const POLICE_CAR = { name: 'SBPD Interceptor', color: 0x1d3557, topSpeed: 37, accel: 17, grip: 2.7, len: 4.3 };
 
-export const TRAFFIC_COUNT = 12;
-export const PED_COUNT = 18;
+export const TRAFFIC_COUNT = 14;
+export const PED_COUNT = 24;
 
 // Wanted stars: crimes add stars, heat fades when no police unit can see you.
 export const WANTED = {
@@ -47,7 +47,9 @@ export const WANTED = {
   hitPedStars: 1,
   ramCopStars: 1,
   crimeCooldown: 10, // seconds before the same crime type adds a star again
-  loseSightSeconds: 8, // unseen this long -> stars start blinking, then drop one
+  ramCopCooldown: 25, // ramming a cruiser mid-chase is near-unavoidable on narrow roads — a longer cooldown stops one chase stacking to 5 stars by itself
+  loseDistance: 40, // no police unit within this many units counts as "lost them"
+  loseSightSeconds: 4, // unseen this long -> stars start blinking, then drop one
   blinkSeconds: 3,
   policePerStar: [0, 1, 2, 3, 4, 5], // chasing police cars per star level
   roadblockAt: 3, // stars at which roadblocks appear
@@ -75,7 +77,8 @@ export const DIFFICULTIES = {
   Heat: { policeSpeed: 1.15, payout: 1.25, label: 'Heat — faster cops, bigger pay' },
 };
 
-// Golden Hour + Sunset Boulevard (theme-factory): the sun-soaked look.
+// Neon-noir night (theme-factory): cold indigo sky, warm lit windows, gold
+// HUD on dark navy — the opposite of the sunset-Bay monoculture on the board.
 export const PALETTE = {
   mustard: '#f4a900',
   terracotta: '#c1666b',
@@ -85,13 +88,13 @@ export const PALETTE = {
   coral: '#f4a261',
   sand: '#e9c46a',
   deepPurple: '#264653',
-  sky: '#f6c177',
-  fog: '#e8b48a',
-  sun: '#ffd9a0',
-  sea: '#2a9d8f',
-  asphalt: '#4f4a44',
-  sidewalk: '#cbb89a',
-  hudPanel: 'rgba(38,70,83,0.85)',
+  sky: '#1c2450',
+  fog: '#232a4a',
+  sun: '#cfe0ff',
+  sea: '#14324a',
+  asphalt: '#33302c',
+  sidewalk: '#6b6258',
+  hudPanel: 'rgba(20,26,48,0.88)',
   hudText: '#f5ead6',
 };
 

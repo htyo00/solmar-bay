@@ -8,13 +8,13 @@ export function damagePlayer(world, amount, cause) {
   const player = world.player;
   if (player.inCar) {
     player.inCar.health -= amount * 2;
-    if (player.inCar.health <= 0) {
-      player.inCar.health = 0;
-      player.inCar.wrecked = true;
-    }
+    if (player.inCar.health <= 0) player.inCar.health = 15; // never wrecks: see vehicles.js
     return false;
   }
-  player.health -= amount;
+  // On foot: the SBPD vest absorbs damage before health does.
+  const absorbed = Math.min(player.armor, amount);
+  player.armor -= absorbed;
+  player.health -= (amount - absorbed);
   world.shake = Math.min(1, world.shake + amount / 40);
   if (player.health <= 0) {
     player.health = 0;
@@ -34,9 +34,17 @@ export function resolveCombat(world, dt) {
   const player = world.player;
   if (player.inCar) {
     for (const cop of world.police.cars) {
-      const dist = Math.hypot(cop.x - player.inCar.x, cop.z - player.inCar.z);
+      const dx = cop.x - player.inCar.x;
+      const dz = cop.z - player.inCar.z;
+      const dist = Math.hypot(dx, dz);
       const rel = Math.abs(player.inCar.speed - cop.speed);
-      if (dist < 4 && rel > 8) {
+      // Velocity, not facing: a stationary Dante facing an incoming
+      // cruiser is not ramming it — the cruiser is ramming him. (Probe 2:
+      // a pinned, stationary Comet collected stars 1 -> 5 from cruisers
+      // ramming it head-on, because the old rule only checked heading.)
+      const facing = (Math.sin(player.inCar.heading) * dx + Math.cos(player.inCar.heading) * dz) / (dist || 1);
+      const toward = Math.abs(player.inCar.speed) > 3 ? Math.sign(player.inCar.speed) * facing : -1;
+      if (dist < 4 && rel > 8 && toward > 0.3) {
         world.crime('ramCop');
         world.shake = Math.min(1, world.shake + 0.5);
       }

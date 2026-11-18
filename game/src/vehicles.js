@@ -9,9 +9,13 @@ let nextId = 1;
 export function createCarMesh(model, color, isPolice) {
   const group = new THREE.Group();
   const len = model.len;
-  const paint = new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.55 });
-  const glass = new THREE.MeshStandardMaterial({ color: 0x1d2b33, roughness: 0.1, metalness: 0.8 });
+  // Clearcoat paint over the env map: glossy car paint that reflects the
+  // neon night, not flat plastic. Glass is near-chrome at dusk.
+  const paint = new THREE.MeshPhysicalMaterial({ color, roughness: 0.3, metalness: 0.35, clearcoat: 1, clearcoatRoughness: 0.08 });
+  const glass = new THREE.MeshStandardMaterial({ color: 0x1d2b33, roughness: 0.08, metalness: 0.9, envMapIntensity: 2 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9 });
+  const trim = new THREE.MeshStandardMaterial({ color: 0x24262a, roughness: 0.5, metalness: 0.6 });
+  const rimMat = new THREE.MeshStandardMaterial({ color: 0xc8c8c8, roughness: 0.25, metalness: 0.9 });
 
   const body = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.55, len), paint);
   body.position.y = 0.55;
@@ -21,15 +25,38 @@ export function createCarMesh(model, color, isPolice) {
   cabin.position.set(0, 1.05, -len * 0.05);
   cabin.castShadow = true;
   group.add(cabin);
+  // Hood and boot shut lines: a thin dark lid so the body is not one slab.
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.06, len * 0.22), paint);
+  hood.position.set(0, 0.85, len * 0.32);
+  group.add(hood);
+  // Front fascia (grille + bumper) and rear bumper in one dark trim each.
+  const fascia = new THREE.Mesh(new THREE.BoxGeometry(1.92, 0.28, 0.12), trim);
+  fascia.position.set(0, 0.42, len / 2 - 0.02);
+  group.add(fascia);
+  const rearBumper = new THREE.Mesh(new THREE.BoxGeometry(1.92, 0.28, 0.12), trim);
+  rearBumper.position.set(0, 0.42, -len / 2 + 0.02);
+  group.add(rearBumper);
+  // Spoiler on the Comet GT — the hero car reads as a sports coupe.
+  if (model.name === 'Comet GT') {
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.06, 0.4), paint);
+    wing.position.set(0, 1.12, -len / 2 + 0.25);
+    wing.castShadow = true;
+    group.add(wing);
+    for (const side of [-0.6, 0.6]) {
+      const strut = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.28, 0.08), trim);
+      strut.position.set(side, 0.95, -len / 2 + 0.25);
+      group.add(strut);
+    }
+  }
   if (isPolice) {
     const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.92, 0.18, len * 0.6),
       new THREE.MeshStandardMaterial({ color: 0xf5ead6, roughness: 0.4 }));
     stripe.position.y = 0.62;
     group.add(stripe);
   }
-  // Headlights and taillights.
-  const headMat = new THREE.MeshStandardMaterial({ color: 0xfff2c0, emissive: 0xffe9a8, emissiveIntensity: 1.2 });
-  const tailMat = new THREE.MeshStandardMaterial({ color: 0xaa2222, emissive: 0x881111, emissiveIntensity: 0.8 });
+  // Headlights and taillights — bright at night, they cut the dark.
+  const headMat = new THREE.MeshStandardMaterial({ color: 0xfff2c0, emissive: 0xffe9a8, emissiveIntensity: 3 });
+  const tailMat = new THREE.MeshStandardMaterial({ color: 0xaa2222, emissive: 0xcc2211, emissiveIntensity: 2 });
   for (const side of [-0.6, 0.6]) {
     const head = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.15, 0.08), headMat);
     head.position.set(side, 0.6, len / 2);
@@ -53,14 +80,18 @@ export function createCarMesh(model, color, isPolice) {
     lightBar.userData = { red, blue };
     group.add(lightBar);
   }
-  // Wheels: spin with speed, front pair steers.
+  // Wheels: spin with speed, front pair steers; a metallic rim disc on
+  // each so the wheel reads as a wheel, not a black doughnut.
   const wheelGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.3, 10);
+  const rimGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.32, 12);
   const wheels = [];
   for (const [wx, wz] of [[-0.85, len / 2 - 0.7], [0.85, len / 2 - 0.7], [-0.85, -len / 2 + 0.7], [0.85, -len / 2 + 0.7]]) {
     const wheel = new THREE.Mesh(wheelGeo, dark);
     wheel.rotation.z = Math.PI / 2;
     wheel.position.set(wx, 0.36, wz);
     wheel.castShadow = true;
+    const rim = new THREE.Mesh(rimGeo, rimMat);
+    wheel.add(rim);
     group.add(wheel);
     wheels.push(wheel);
   }
@@ -81,7 +112,9 @@ export function createCar(model, x, z, heading, options = {}) {
     speed: 0,
     steer: 0,
     health: 100,
+    nitro: 100, // special meter: Shift in a car burns it for +30% top speed
     wrecked: false,
+    timeSinceHit: 99, // seconds since the last damaging hit; drives the heal
     isPlayer: false,
     isPolice: !!options.isPolice,
     isTraffic: !!options.isTraffic,
@@ -106,6 +139,15 @@ function forward(car) {
 export function stepCar(car, drive, dt, city, others) {
   if (car.wrecked) return 0;
   const model = car.model;
+  // Collision damage has a cooldown: without it, one rear-end at speed
+  // charges health every step while the cars overlap and totals the car
+  // in under a second. A crash costs once; the push and the slowdown
+  // below still apply every step.
+  car.hitCooldown = Math.max(0, (car.hitCooldown || 0) - dt);
+  // Scrapes heal: a car that has not been hit for a while slowly recovers,
+  // so a long drive through traffic does not grind the car to death.
+  car.timeSinceHit = (car.timeSinceHit || 0) + dt;
+  if (car.timeSinceHit > 3 && car.health < 100) car.health = Math.min(100, car.health + 3 * dt);
   const fwd = forward(car);
   const grip = car.isPolice ? model.grip : model.grip * (drive.handbrake ? 0.45 : 1);
   const targetSteer = drive.steer * (0.55 + 0.45 * Math.min(1, Math.abs(car.speed) / 12));
@@ -119,7 +161,15 @@ export function stepCar(car, drive, dt, city, others) {
   }
   if (drive.handbrake) car.speed -= Math.sign(car.speed) * Math.min(Math.abs(car.speed), 14 * dt);
   const maxReverse = 9;
-  car.speed = Math.max(-maxReverse, Math.min(model.topSpeed, car.speed));
+  // Nitro (Shift): +30% top speed while the meter lasts, refills on the move.
+  const boosting = drive.nitro && car.isPlayer && car.nitro > 0 && car.speed > 5;
+  if (boosting) car.nitro = Math.max(0, car.nitro - 35 * dt);
+  else if (Math.abs(car.speed) > 5) car.nitro = Math.min(100, car.nitro + 4 * dt);
+  // A badly hurt car limps: smoking, slower, but still moving. The
+  // player's car never dies outright — a wrecked mission car would
+  // soft-lock the job, so it bottoms out at 15 health and keeps driving.
+  const limp = car.health < 40 ? 0.7 : 1;
+  car.speed = Math.max(-maxReverse, Math.min(model.topSpeed * (boosting ? 1.3 : 1) * limp, car.speed));
 
   // Yaw follows steering; handbrake slides the tail out.
   const yawRate = car.steer * (car.speed / (model.len * 0.9)) * grip * 0.55;
@@ -136,7 +186,11 @@ export function stepCar(car, drive, dt, city, others) {
     if (intoWall > 0.2) {
       impact = Math.abs(car.speed) * intoWall;
       car.speed *= (1 - intoWall * 0.7);
-      if (impact > 6) car.health -= (impact - 6) * 2;
+      if (impact > 10 && car.hitCooldown <= 0) {
+        car.health -= Math.min(12, (impact - 10) * 0.8);
+        car.hitCooldown = 0.5;
+        car.timeSinceHit = 0;
+      }
     }
     nx = resolved.x;
     nz = resolved.z;
@@ -149,29 +203,62 @@ export function stepCar(car, drive, dt, city, others) {
     const dist = Math.hypot(dx, dz);
     const minDist = (car.model.len + other.model.len) / 2 - 0.6;
     if (dist > 0.01 && dist < minDist) {
-      const push = (minDist - dist) / 2;
+      // The player's car is the heavy one: it shoves traffic aside instead
+      // of being shoved off the road into a block by it.
+      const share = car.isPlayer ? 0.2 : other.isPlayer ? 0.8 : 0.5;
+      const push = minDist - dist;
       const ux = dx / dist;
       const uz = dz / dist;
-      nx += ux * push;
-      nz += uz * push;
-      other.x -= ux * push;
-      other.z -= uz * push;
+      nx += ux * push * share;
+      nz += uz * push * share;
+      other.x -= ux * push * (1 - share);
+      other.z -= uz * push * (1 - share);
       const rel = Math.abs(car.speed - other.speed);
-      if (rel > 5) {
+      if (rel > 8) {
         impact = Math.max(impact, rel);
-        car.health -= (rel - 5) * 1.5;
-        other.health -= (rel - 5) * 1.5;
-        other.speed *= 0.8;
-        car.speed *= 0.85;
+        if (car.hitCooldown <= 0) {
+          const dmg = Math.min(10, (rel - 8) * 0.7);
+          car.health -= dmg;
+          other.health -= dmg;
+          car.hitCooldown = 0.5;
+          other.hitCooldown = 0.5;
+          car.timeSinceHit = 0;
+          other.timeSinceHit = 0;
+          // Speed loss applies ONCE per hit, not every step: per-step
+          // damping while overlapped glued a chasing cruiser to the
+          // player's bumper forever (probe-evade: the Comet never got
+          // past 67 km/h on a straight because every ram scrubbed 15%
+          // per step, so the gap never opened and no star could drop).
+          // The positional push above still separates the cars each step.
+          other.speed *= 0.8;
+          car.speed *= 0.85;
+        }
       }
     }
   }
   car.x = nx;
   car.z = nz;
+  // Map edge: Solmar Bay is a bounded district — a car must not leave the
+  // road network into the void. Round 16: the evade lap blew the (-100,100)
+  // corner at speed and the Comet drove to x=-150, where a cruiser pinned
+  // it off-map and the stars could never drop. Clamp to the bounds (the
+  // pier at z=132 must stay reachable, so the south edge is the sea at
+  // z=140) and scrub speed on contact, like a wall.
+  if (car.x < -108 || car.x > 108 || car.z < -108 || car.z > 140) {
+    car.x = Math.max(-108, Math.min(108, car.x));
+    car.z = Math.max(-108, Math.min(140, car.z));
+    car.speed *= 0.5;
+  }
   if (car.health <= 0) {
-    car.health = 0;
-    car.wrecked = true;
-    car.speed = 0;
+    if (car.isPlayer) {
+      // The player's car never dies outright: it limps on at 15 health,
+      // smoking and slow. A dead mission car would soft-lock the job.
+      car.health = 15;
+    } else {
+      car.health = 0;
+      car.wrecked = true;
+      car.speed = 0;
+    }
   }
   syncCarMesh(car, dt);
   return impact;

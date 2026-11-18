@@ -12,7 +12,7 @@ export function defaultSave() {
     bestGrade: null,
     bestTime: null,
     difficulty: 'Street',
-    stats: { missionsDone: 0, carsStolen: 0, busted: 0, wasted: 0, topSpeed: 0 },
+    stats: { missionsDone: 0, carsStolen: 0, busted: 0, wasted: 0, topSpeed: 0, copsLost: 0, coins: 0 },
   };
 }
 

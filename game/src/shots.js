@@ -56,6 +56,7 @@ function driveForward(world, seconds) {
  */
 export function stageShot(name, world) {
   resetWorld(world);
+  world.noBanner = true; // staged shots frame the action, not the notification
   world.cameraMode = 'play';
   const comet = world.cars.find((car) => car.model.name === 'Comet GT');
   if (name === 'title') {
@@ -73,8 +74,10 @@ export function stageShot(name, world) {
     world.missions.step = 1;
     world.missions.objective = 'Drive the Comet GT to the Marina pier';
     world.missions.waypoint = { x: world.city.pier.x, z: world.city.pier.z, label: 'Marina pier' };
-    world.feed('Mara Voss: "Clean work, Dante. $500 is yours."');
+    world.feed('Mara Voss: "Take the Hills avenue down to the pier. Don\'t scratch her."');
     driveForward(world, 1.5);
+    const mcar = world.player.inCar;
+    world.shotCam = { x: mcar.x - 8, y: 4, z: mcar.z + 9, lx: mcar.x + 12, ly: 1.5, lz: mcar.z - 2 };
     return 'play';
   }
   if (name === 'complete') {
@@ -90,20 +93,30 @@ export function stageShot(name, world) {
     world.missions.objective = 'Job done. Mara Voss is pleased.';
     return 'complete';
   }
-  // Default: chase. Short run-up so the cruisers stay close behind Dante,
-  // and a side-rear camera that keeps them in the frame with him.
-  putPlayerInCar(world, comet, -30, 60, Math.PI / 2, 28);
-  world.wanted.stars = 3;
-  addPoliceBehind(world, -42, 62, Math.PI / 2, 30);
-  addPoliceBehind(world, -48, 58, Math.PI / 2, 30);
+  // Default: chase. The cover — a police chase down Ocean Drive at neon
+  // dusk: the Comet GT westbound under the SOLMAR BAY arch, 4 stars, the
+  // heli's searchlight overhead, two cruisers on its tail, HUD complete.
+  world.save.cash = 7420; // a mid-game state: big cash, real variable
+  putPlayerInCar(world, comet, 44, 100, -Math.PI / 2, 28);
+  world.wanted.stars = 4;
+  world.police.heliAngle = Math.PI; // heli ahead-west, in frame over the arch
+  addPoliceBehind(world, 56, 102, -Math.PI / 2, 28);
+  addPoliceBehind(world, 62, 98, -Math.PI / 2, 28);
+  // Clear the shot corridor: no traffic car may sit in the hero's path.
+  for (const car of world.traffic) {
+    if (Math.abs(car.z - 100) < 8 && car.x > -20 && car.x < 70) {
+      car.x = -90;
+      car.z = -60;
+    }
+  }
   world.missions.active = true;
   world.missions.step = 2;
   world.missions.objective = 'Lose the cops — break line of sight until the stars drop';
   world.missions.waypoint = { x: world.city.pier.x, z: world.city.pier.z, label: 'Marina pier' };
   world.feed('SBPD: vehicle theft reported in Ocean Drive. Units responding.');
   world.feed('Mara Voss: "Lose them first, then deliver."');
-  driveForward(world, 0.8);
+  driveForward(world, 0.6);
   const car = world.player.inCar;
-  world.shotCam = { x: car.x - 4, y: 5.5, z: car.z - 15, lx: car.x + 10, ly: 1, lz: car.z + 3 };
+  world.shotCam = { x: car.x + 9, y: 3.8, z: car.z + 8, lx: car.x - 12, ly: 1.5, lz: car.z - 2 };
   return 'play';
 }

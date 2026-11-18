@@ -145,6 +145,14 @@ export function resetWorld(world) {
   }
   world.wanted = createWanted();
   world.missions = createMissions(world);
+  for (const coin of world.city.coins) {
+    coin.taken = false;
+    if (coin.mesh) coin.mesh.visible = true;
+  }
+  for (const crate of world.city.armorCrates) {
+    crate.taken = false;
+    if (crate.mesh) crate.mesh.visible = true;
+  }
   world.elapsed = 0;
   world.shake = 0;
   world.feedLog = [];
@@ -157,6 +165,32 @@ export function resetWorld(world) {
  * One fixed step. `driveOverride` (shots) steers the player car directly;
  * otherwise the keyboard drives. Returns the event flags for this step.
  */
+function stepPickups(world) {
+  const player = world.player;
+  const px = player.inCar ? player.inCar.x : player.x;
+  const pz = player.inCar ? player.inCar.z : player.z;
+  for (const coin of world.city.coins) {
+    // 3.5, not 2.2: a car weaving along the road at speed passes a few
+    // units off the centreline — collecting a coin should not need pixel
+    // precision (round 15: the coin drive passed the coin and missed it).
+    if (!coin.taken && Math.hypot(px - coin.x, pz - coin.z) < 3.5) {
+      coin.taken = true;
+      if (coin.mesh) coin.mesh.visible = false;
+      world.save.stats.coins += 1;
+      world.save.cash += 25;
+      world.feed(`Bay Coin ${world.save.stats.coins}/8 — +$25.`);
+    }
+  }
+  for (const crate of world.city.armorCrates) {
+    if (!crate.taken && !player.inCar && Math.hypot(px - crate.x, pz - crate.z) < 2.2) {
+      crate.taken = true;
+      if (crate.mesh) crate.mesh.visible = false;
+      player.armor = Math.min(100, player.armor + 50);
+      world.feed('SBPD vest picked up — armour +50.');
+    }
+  }
+}
+
 export function stepWorld(world, dt, input, driveOverride) {
   world.elapsed += dt;
   world.lastImpact = 0;
@@ -182,6 +216,7 @@ export function stepWorld(world, dt, input, driveOverride) {
     events |= stepPlayer(world, dt, input);
     player.prevSteal = input.steal();
   }
+  stepPickups(world);
   events |= stepTraffic(world, dt, world.random);
   events |= stepPeds(world, dt);
   events |= stepPolice(world, dt, world.random);
